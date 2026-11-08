@@ -1,0 +1,16 @@
+# Build products and local caches
+build/
+build-cache/
+*.app/
+__pycache__/
+*.pyc
+.DS_Store
+# Captures, exported media, and local diagnostics
+*.dv
+*.mov
+*.m2t
+*.mp4
+*.wav
+*.log
+.env
+.env.*
