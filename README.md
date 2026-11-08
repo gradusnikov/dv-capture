@@ -21,6 +21,12 @@ A small native macOS app for capturing DV camcorders over FireWire, with live vi
 
 The application and capture backend currently build for **arm64**. The backend's upstream Makefile also supports Intel, but this app packaging has only been tested on Apple Silicon.
 
+## Download and install
+
+Compiled Apple Silicon builds are available on the [GitHub Releases page](https://github.com/gradusnikov/dv-capture/releases). Download the DMG, open it, and drag DV Capture into Applications; alternatively extract the ZIP and move the app into Applications.
+
+Install the dependencies listed above before using preview/export. The app uses an ad-hoc signature and is not notarized, so macOS may require you to approve opening it. Builds target macOS 13–15; hardware testing has been on macOS 15. A release download does not include FFmpeg or Apple developer tools.
+
 ## Build
 
 ```sh

@@ -12,7 +12,7 @@ cp tapecap/LICENSE "$app/Contents/Resources/Licenses/tapecap.txt"
 cp tapecap/third_party/AVCVideoServices/NOTICE.md "$app/Contents/Resources/Licenses/Apple-Provenance.txt"
 sed -n '1,45p' tapecap/third_party/AVCVideoServices/DVReceiver.cpp > "$app/Contents/Resources/Licenses/Apple.txt"
 mkdir -p build/module-cache
-xcrun swiftc -module-cache-path build/module-cache -swift-version 5 -parse-as-library -O DVCapture.swift -o "$app/Contents/MacOS/DVCapture" -framework SwiftUI -framework AppKit -framework AVFoundation
+xcrun swiftc -target arm64-apple-macos13.0 -module-cache-path build/module-cache -swift-version 5 -parse-as-library -O DVCapture.swift -o "$app/Contents/MacOS/DVCapture" -framework SwiftUI -framework AppKit -framework AVFoundation
 codesign --force --sign - "$app/Contents/MacOS/tapecap"
 codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"
