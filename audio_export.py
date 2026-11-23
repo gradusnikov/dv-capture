@@ -51,32 +51,43 @@ def export(source, output, preview=False):
     pal = bool(header[3] & 0x80)
     with tempfile.TemporaryDirectory(prefix='dv-audio-export-') as scratch:
         media = source
-        if not audio_tracks(source):
-            if not pal:
-                raise RuntimeError('No audio track recognized. Recovery is only verified for PAL VX1000 captures.')
+        if pal:
             fixed = os.path.join(scratch, 'metadata-recovery.dv')
             repaired = 0
-            with open(source, 'rb') as src, open(fixed, 'xb') as dst:
-                while True:
-                    data = bytearray(src.read(144000))
-                    if not data:
-                        break
-                    for i in range(0, len(data) - 79, 80):
-                        # Source pack ID 0x40 and impossible 48kHz/12-bit mode.
-                        # Only match the precise PAL pattern observed here.
-                        if (data[i] >> 5 == 3 and data[i+3] == 0x40
-                                and data[i+6] == 0xe0 and data[i+7] == 0xc1):
-                            data[i+3] = 0x50
-                            data[i+7] = 0xd1  # 32kHz / 12-bit nonlinear audio
-                            repaired += 1
-                    dst.write(data)
-            if not repaired or not audio_tracks(fixed):
-                raise RuntimeError('No recoverable audio track found. Original capture is unchanged.')
-            media = fixed
-            print(f'Recovered {repaired} malformed PAL VX1000 audio-source packs in a temporary copy.', flush=True)
-            print('Please listen to the export to verify the recovered sound. Original DV is unchanged.', flush=True)
-        else:
-            print('Standard DV audio detected; no metadata repair needed.', flush=True)
+            # A later scene can have different headers from the initial probe.
+            # Copy the prefix only once, when the first repair becomes necessary.
+            with open(source, 'rb') as src:
+                dst = None
+                try:
+                    while True:
+                        position = src.tell()
+                        data = bytearray(src.read(144000))
+                        if not data:
+                            break
+                        # Nine audio DIF blocks per 150-block DIF sequence.
+                        for seq in range(0, len(data), 12000):
+                            for i in range(seq + 480, min(seq + 12000, len(data) - 79), 1280):
+                                if (data[i] >> 5 == 3 and data[i+3] == 0x40
+                                        and data[i+6:i+8] == b'\xe0\xc1'):
+                                    data[i+3] = 0x50
+                                    data[i+7] = 0xd1
+                                    repaired += 1
+                        if repaired and dst is None:
+                            dst = open(fixed, 'xb')
+                            src.seek(0)
+                            while src.tell() < position:
+                                dst.write(src.read(min(position - src.tell(), 1024 * 1024)))
+                            src.seek(position + len(data))
+                        if dst is not None:
+                            dst.write(data)
+                finally:
+                    if dst is not None:
+                        dst.close()
+            if repaired:
+                media = fixed
+                print(f'Recovered {repaired} malformed audio-source packs.', flush=True)
+        if not audio_tracks(media):
+            raise RuntimeError('No recoverable audio track found. Original capture is unchanged.')
         if media != source and not preview:
             # Preserve the repaired raw DV too, even if a later MOV export fails.
             media = save_corrected_dv(media, source)
