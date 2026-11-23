@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """One FireWire receiver, lossless DV recording, bounded video and audio preview."""
-import base64, json, os, queue, shutil, signal, subprocess, sys, threading, time
+import base64, json, os, queue, signal, subprocess, sys, threading, time
 
 output_lock = threading.Lock()
 record_lock = threading.Lock()
@@ -26,7 +26,7 @@ def finish_record():
                 record_file = None
             emit('saved', path=record_path)
 
-ffmpeg = shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg'
+ffmpeg = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime', 'bin', 'ffmpeg')
 try:
     decoder = subprocess.Popen([ffmpeg, '-hide_banner', '-loglevel', 'error', '-probesize', '32', '-analyzeduration', '0', '-threads', '1', '-flags', 'low_delay', '-f', 'dv', '-i', 'pipe:0', '-an', '-fps_mode', 'passthrough', '-vf', 'bwdif=mode=send_frame:parity=auto:deint=all,scale=640:480', '-c:v', 'mjpeg', '-q:v', '5', '-threads', '1', '-f', 'image2pipe', '-flush_packets', '1', 'pipe:1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     engine = subprocess.Popen([sys.argv[1], 'capture', '--format', 'dv', '--no-control', '--eot-timeout', '0', '--stdin-control', '--low-latency', '-'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

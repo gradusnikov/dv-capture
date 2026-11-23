@@ -8,8 +8,9 @@ import tempfile
 import shutil
 import uuid
 
-FFMPEG = '/opt/homebrew/bin/ffmpeg'
-FFPROBE = '/opt/homebrew/bin/ffprobe'
+BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runtime', 'bin')
+FFMPEG = os.path.join(BIN, 'ffmpeg')
+FFPROBE = os.path.join(BIN, 'ffprobe')
 
 def audio_tracks(path):
     result = subprocess.run([FFPROBE, '-v', 'error', '-select_streams', 'a',
@@ -41,7 +42,7 @@ def save_corrected_dv(repaired, original):
 
 def export(source, output, preview=False):
     if not all(os.access(p, os.X_OK) for p in [FFMPEG, FFPROBE]):
-        raise RuntimeError('FFmpeg is required at /opt/homebrew/bin. It is installed on this Mac.')
+        raise RuntimeError('Bundled FFmpeg tools are missing. Reinstall DV Capture.')
     if os.path.exists(output):
         raise RuntimeError('Output already exists; choose a new file name.')
     with open(source, 'rb') as file:
@@ -94,7 +95,7 @@ def export(source, output, preview=False):
         args = [FFMPEG, '-hide_banner', '-loglevel', 'warning', '-nostdin', '-n', '-i', media]
         if preview:
             args += ['-t', '15', '-map', '0:v:0', '-map', '0:a:0',
-                     '-c:v', 'libx264', '-preset', 'fast', '-crf', '20',
+                     '-c:v', 'mpeg4', '-q:v', '3',
                      '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k']
         else:
             args += ['-map', '0:v:0', '-map', '0:a', '-c:v', 'copy', '-c:a', 'pcm_s16le']

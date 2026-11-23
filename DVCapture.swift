@@ -100,6 +100,7 @@ final class CaptureModel: ObservableObject {
     private var timer: Timer?
     private var began = Date()
     var onIdle: (() -> Void)?
+    var python: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/runtime/python/bin/python3.12") }
     var executable: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/tapecap") }
 
     @Published var previewing = false
@@ -159,8 +160,8 @@ final class CaptureModel: ObservableObject {
     func startLive() {
         guard !busy, !previewing else { return }
         let p = Process(), input = Pipe(), output = Pipe()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        p.arguments = [Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/live_session.py").path, executable.path]
+        p.executableURL = python
+        p.arguments = ["-I", "-B", Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/live_session.py").path, executable.path]
         p.standardInput = input; p.standardOutput = output; p.standardError = FileHandle.nullDevice
         liveProcess = p; liveInput = input.fileHandleForWriting
         previewing = true; liveReady = false; previewSurface.image = nil
@@ -417,9 +418,9 @@ final class CaptureModel: ObservableObject {
         }
         let destination = output
         let script = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/audio_export.py")
-        var args = [script.path, file.path, output.path]
+        var args = ["-I", "-B", script.path, file.path, output.path]
         if preview { args.append("preview") }
-        launch(URL(fileURLWithPath: "/usr/bin/python3"), args) { code, report in
+        launch(python, args) { code, report in
             self.busy = false
             if code == 0, FileManager.default.fileExists(atPath: output.path) {
                 if !preview { self.lastMOV = destination }

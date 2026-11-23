@@ -1,6 +1,6 @@
 # DV Capture
 
-A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.6**.
+A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.7**.
 
 ## Features
 
@@ -15,19 +15,17 @@ A small native macOS app for capturing DV camcorders over FireWire, with live vi
 ## Requirements
 
 - Apple Silicon Mac running macOS 13–15 with a working FireWire connection.
-- Xcode Command Line Tools / Xcode SDK containing the legacy IOKit FireWire and AV/C headers. macOS 26 removed FireWire support; this app targets the older stack.
-- `/usr/bin/python3` (provided by Apple's developer tools on the tested Mac).
-- Homebrew FFmpeg and ffprobe at `/opt/homebrew/bin` for preview and export: `brew install ffmpeg`.
-
-The application and capture backend currently build for **arm64**. The backend's upstream Makefile also supports Intel, but this app packaging has only been tested on Apple Silicon.
+- The release bundles tapecap, Python, FFmpeg and ffprobe.
 
 ## Download and install
 
 Compiled Apple Silicon builds are available on the [GitHub Releases page](https://github.com/gradusnikov/dv-capture/releases). Download the DMG, open it, and drag DV Capture into Applications; alternatively extract the ZIP and move the app into Applications.
 
-Install the dependencies listed above before using preview/export. The app uses an ad-hoc signature and is not notarized, so macOS may require you to approve opening it. Builds target macOS 13–15; hardware testing has been on macOS 15. A release download does not include FFmpeg or Apple developer tools.
+The app is ad-hoc signed. macOS may require first-launch approval. Hardware testing has been on macOS 15. macOS 26 removed the FireWire stack required by this app.
 
 ## Build
+
+Building from source requires an Apple Silicon Mac, Xcode Command Line Tools with the legacy FireWire SDK headers, and internet access for the pinned Python and FFmpeg downloads.
 
 ```sh
 ./build.sh
@@ -35,7 +33,7 @@ Install the dependencies listed above before using preview/export. The app uses 
 
 The resulting app is `build/DV Capture.app`. The script builds the bundled tapecap backend and SwiftUI app, copies Python helpers and third-party license notices, and applies an ad-hoc signature. It is not notarized.
 
-To install for all local accounts, copy the built app to `/Applications` with administrator authorization. FFmpeg and Python must also be accessible to each account. No credentials are embedded in the app.
+To install for all local accounts, copy the built app to `/Applications` with administrator authorization.
 
 ## Use
 
@@ -51,7 +49,7 @@ Quitting during capture waits for saving and automatic export. Empty captures ar
 
 ## Audio repair boundaries
 
-The observed PAL VX1000 defect is matched only in audio DIF blocks with source pack `0x40`, byte 3 of the pack `0xe0`, and byte 4 `0xc1`. Repair changes the source ID to `0x50` and the sample-rate/quantization byte to `0xd1` (32 kHz, 12-bit nonlinear). Video and audio sample bytes are not modified. Full export decodes audio to PCM; video is copied without re-encoding. Already recognized audio is not repaired by the export helper.
+The observed PAL VX1000 defect is matched only in audio DIF blocks with source pack `0x40`, byte 3 of the pack `0xe0`, and byte 4 `0xc1`. Repair changes the source ID to `0x50` and the sample-rate/quantization byte to `0xd1` (32 kHz, 12-bit nonlinear). Video and audio sample bytes are not modified. Full export decodes audio to PCM; video is copied without re-encoding. The helper scans the full PAL capture so it can repair later scenes even when the first scene already has recognized audio.
 
 This is a compatibility workaround, not a claim to fix every damaged DV recording. Unknown missing-audio cases fail explicitly. The underlying fault has not been conclusively localized: diagnostics found the malformed bytes in the FireWire receive payload before frame assembly in both tape and live CAMERA modes. Camera output and the host transport/driver chain still need cross-testing.
 
