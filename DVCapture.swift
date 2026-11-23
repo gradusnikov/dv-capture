@@ -16,6 +16,9 @@ struct NativePreview: NSViewRepresentable {
         view.image = surface.image; surface.view = view
         return view
     }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSImageView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: .zero)
+    }
     func updateNSView(_ view: NSImageView, context: Context) {}
 }
 
@@ -533,14 +536,13 @@ struct CaptureView: View {
                     }.frame(height: 100)
                 }
             }
-        }.padding(20)
+        }.frame(width: 866).padding(20)
     }
 
     private var previewPanel: some View {
         VStack(spacing: 10) {
             ZStack {
-                Color.black
-                NativePreview(surface: model.previewSurface)
+                Color.black.overlay { NativePreview(surface: model.previewSurface) }
                 if !model.previewing {
                     Button("Start Live Preview") { model.startLive() }
                         .disabled(model.busy)

@@ -1,8 +1,8 @@
 # DV Capture
 
-A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.8**.
+A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.8.1**.
 
-![DV Capture 1.8 with a connected preview waiting for video, tape controls on the left, and capture settings on the right](docs/images/dv-capture.png)
+![DV Capture 1.8.1 showing skateboarding footage above the tape controls, with capture settings on the right](docs/images/dv-capture.png)
 
 ## Features
 
