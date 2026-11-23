@@ -197,31 +197,37 @@ final class CaptureModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async {
             var buffer = Data()
             var announcedAudio = false
-            while true {
-                let data = output.fileHandleForReading.availableData
-                if data.isEmpty { break }
-                buffer.append(data)
-                while let end = buffer.firstIndex(of: 10) {
-                    let line = buffer[..<end]; buffer.removeSubrange(...end)
-                    if let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] {
-                        if obj["event"] as? String == "frame", let encoded = obj["data"] as? String,
-                           let data = Data(base64Encoded: encoded) {
-                            self.queuePreview(data)
-                        } else if obj["event"] as? String == "monitor_pause", let paused = obj["paused"] as? Bool {
-                            announcedAudio = false
-                            if paused { self.audioMonitor.discardBufferedAudio() }
-                            DispatchQueue.main.async { self.audioMessage = paused ? "Tape paused" : "Waiting for audio" }
-                        } else if obj["event"] as? String == "audio", let encoded = obj["data"] as? String,
-                                  let data = Data(base64Encoded: encoded) {
-                            self.audioMonitor.receive(data)
-                            if !announcedAudio {
-                                announcedAudio = true
-                                DispatchQueue.main.async { self.audioMessage = "Live audio · stereo 1/2" }
+            // The reader lives for the whole tape. Release temporary decoded images
+            // and Foundation objects after each pipe read, including partial lines.
+            var reading = true
+            while reading {
+                reading = autoreleasepool {
+                    let data = output.fileHandleForReading.availableData
+                    if data.isEmpty { return false }
+                    buffer.append(data)
+                    while let end = buffer.firstIndex(of: 10) {
+                        let line = buffer[..<end]; buffer.removeSubrange(...end)
+                        if let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] {
+                            if obj["event"] as? String == "frame", let encoded = obj["data"] as? String,
+                               let data = Data(base64Encoded: encoded) {
+                                self.queuePreview(data)
+                            } else if obj["event"] as? String == "monitor_pause", let paused = obj["paused"] as? Bool {
+                                announcedAudio = false
+                                if paused { self.audioMonitor.discardBufferedAudio() }
+                                DispatchQueue.main.async { self.audioMessage = paused ? "Tape paused" : "Waiting for audio" }
+                            } else if obj["event"] as? String == "audio", let encoded = obj["data"] as? String,
+                                      let data = Data(base64Encoded: encoded) {
+                                self.audioMonitor.receive(data)
+                                if !announcedAudio {
+                                    announcedAudio = true
+                                    DispatchQueue.main.async { self.audioMessage = "Live audio · stereo 1/2" }
+                                }
+                            } else {
+                                DispatchQueue.main.async { self.liveEvent(obj) }
                             }
-                        } else {
-                            DispatchQueue.main.async { self.liveEvent(obj) }
                         }
                     }
+                    return true
                 }
             }
             p.waitUntilExit()
