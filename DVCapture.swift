@@ -43,6 +43,13 @@ final class LiveAudioMonitor {
             } catch { self.report?("Audio output unavailable: \(error.localizedDescription)") }
         }
     }
+    func discardBufferedAudio() {
+        queue.async {
+            guard self.enabled else { return }
+            self.generation += 1; self.queuedBuffers = 0
+            self.player.stop(); self.player.play()
+        }
+    }
     func setVolume(_ volume: Float) { queue.async { self.player.volume = volume } }
     func stop() {
         queue.async {
@@ -200,6 +207,10 @@ final class CaptureModel: ObservableObject {
                         if obj["event"] as? String == "frame", let encoded = obj["data"] as? String,
                            let data = Data(base64Encoded: encoded) {
                             self.queuePreview(data)
+                        } else if obj["event"] as? String == "monitor_pause", let paused = obj["paused"] as? Bool {
+                            announcedAudio = false
+                            if paused { self.audioMonitor.discardBufferedAudio() }
+                            DispatchQueue.main.async { self.audioMessage = paused ? "Tape paused" : "Waiting for audio" }
                         } else if obj["event"] as? String == "audio", let encoded = obj["data"] as? String,
                                   let data = Data(base64Encoded: encoded) {
                             self.audioMonitor.receive(data)
@@ -436,6 +447,43 @@ final class CaptureModel: ObservableObject {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: CaptureModel?
+    private var keyMonitor: Any?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let model = self?.model, let window = event.window,
+                  window.isKeyWindow, window.isMainWindow, !(window is NSPanel),
+                  window.attachedSheet == nil, NSApp.modalWindow == nil,
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+            else { return event }
+
+            let key = event.charactersIgnoringModifiers?.lowercased()
+            if let editor = window.firstResponder as? NSTextView {
+                guard editor.isFieldEditor, !editor.hasMarkedText(),
+                      key == "\u{1b}" || key == "\r" || key == "\u{3}"
+                else { return event }
+                window.makeFirstResponder(nil)
+                return nil
+            }
+            if key == "r" {
+                guard !model.busy else { return event }
+                if !event.isARepeat { model.start() }
+                return nil
+            }
+            guard model.liveReady, !model.recording else { return event }
+            let action: String
+            switch key {
+            case "\u{F702}", "j": action = "navigate-back"
+            case "\u{F703}", "l": action = "navigate-forward"
+            case "k": action = "pause"
+            case " ", "\u{F730}": action = "toggle-play"
+            default: return event
+            }
+            if !event.isARepeat { model.liveCommand(action) }
+            return nil
+        }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let m = model else { return .terminateNow }
         if !m.busy {
@@ -504,6 +552,8 @@ struct CaptureView: View {
                     NativePreview(surface: model.previewSurface)
                     if !model.previewing { Text("Camera preview").foregroundColor(.gray) }
                 }.frame(width: 600, height: 450).cornerRadius(8)
+                    .contentShape(Rectangle())
+                    .onTapGesture { NSApp.keyWindow?.makeFirstResponder(nil) }
                 HStack {
                     Text(model.liveMessage + (model.liveReady && model.previewRate > 0 ? " · \(model.previewRate) fps" : "")).font(.caption).foregroundStyle(.secondary)
                     Spacer()
@@ -512,11 +562,11 @@ struct CaptureView: View {
                     }.disabled(model.busy || (model.previewing && !model.liveReady))
                 }
                 HStack(spacing: 10) {
-                    Button { model.liveCommand("rewind") } label: { Label("Rewind", systemImage: "backward.end.fill") }
+                    Button { model.liveCommand("navigate-back") } label: { Label("Rewind", systemImage: "backward.end.fill") }
                     Button { model.liveCommand("play") } label: { Label("Play", systemImage: "play.fill") }
                     Button { model.liveCommand("pause") } label: { Label("Pause", systemImage: "pause.fill") }
                     Button { model.liveCommand("stop") } label: { Label("Stop tape", systemImage: "stop.fill") }
-                    Button { model.liveCommand("forward") } label: { Label("Forward", systemImage: "forward.end.fill") }
+                    Button { model.liveCommand("navigate-forward") } label: { Label("Forward", systemImage: "forward.end.fill") }
                 }.disabled(!model.liveReady || model.recording)
                 HStack {
                     Button { model.muted.toggle() } label: {
@@ -526,7 +576,7 @@ struct CaptureView: View {
                     Text(model.audioMessage).font(.caption).foregroundStyle(.secondary)
                     Spacer()
                 }.disabled(!model.previewing)
-                Text("VTR mode for tape controls. Winding may hold the last picture. Audio is saved in the recording.")
+                Text("← / J reverse · → / L forward · K pause · Space play/pause · R capture. Stop tape first for full-speed winding.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
     }
@@ -543,10 +593,12 @@ struct CaptureView: View {
                 HStack {
                     Text("File name").frame(width: 80, alignment: .leading)
                     TextField("VX1000", text: $model.name)
+                        .help("Press Return or Esc to finish editing and use the tape shortcuts.")
                 }
                 HStack {
                     Text("Duration").frame(width: 80, alignment: .leading)
                     TextField("0", text: $model.seconds).frame(width: 70)
+                        .help("Press Return or Esc to finish editing and use the tape shortcuts.")
                     Text("seconds · 0 = until stopped").foregroundStyle(.secondary)
                 }
                 Toggle("Start and stop tape playback automatically", isOn: $model.controlTape)

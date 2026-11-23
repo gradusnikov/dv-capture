@@ -37,13 +37,17 @@ except Exception as e:
 
 # Audio has its own decoder so a missing audio track cannot stop video/recording.
 audio_decoder = None
+monitor_lock = threading.Lock()
+monitor_paused = False
 
 def audio_reader(process):
     while not ending.is_set():
         pcm = process.stdout.read(7680)  # 40 ms, stereo s16le at 48 kHz
         if not pcm: break
         if len(pcm) % 4 == 0:
-            emit('audio', data=base64.b64encode(pcm).decode())
+            with monitor_lock:
+                if not monitor_paused:
+                    emit('audio', data=base64.b64encode(pcm).decode())
 
 def audio_writer():
     global audio_decoder
@@ -70,8 +74,14 @@ def audio_writer():
 
 
 def engine_logs():
+    global monitor_paused
     for line in iter(engine.stderr.readline, b''):
         message = line.decode(errors='replace').strip()
+        if message in ('Monitor pause: on', 'Monitor pause: off'):
+            with monitor_lock:
+                monitor_paused = message.endswith('on')
+                emit('monitor_pause', paused=monitor_paused)
+            continue
         emit('log', message=message)
         if 'Capturing' in message: emit('ready')
 
@@ -153,7 +163,7 @@ try:
                 record_file = open(record_path, 'xb')
             emit('recording', path=record_path)
         elif action == 'save': finish_record()
-        elif action in ('play', 'pause', 'stop', 'rewind', 'forward'):
+        elif action in ('play', 'pause', 'toggle-play', 'stop', 'rewind', 'forward', 'navigate-back', 'navigate-forward'):
             engine.stdin.write((action+'\n').encode()); engine.stdin.flush()
 except Exception as e:
     if not ending.is_set(): emit('error', message=str(e))

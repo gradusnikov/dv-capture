@@ -1431,6 +1431,14 @@ static int CmdCapture(const CaptureOptions &opt)
     const char *reason = "stopped";
     std::string pendingCommands;
     bool transportUsed = false;
+    bool monitorPaused = false;
+    double nextPauseInquiry = 0;
+    auto reportPause = [&](bool paused) {
+        if (paused != monitorPaused) {
+            monitorPaused = paused;
+            Info("Monitor pause: %s", paused ? "on" : "off");
+        }
+    };
     while (true)
     {
         usleep(150 * 1000);
@@ -1449,14 +1457,49 @@ static int CmdCapture(const CaptureOptions &opt)
                     bool valid = true;
                     if (cmd == "play") { opcode = kAVCTapePlayOpcode; operand = kTapePlayForward; }
                     else if (cmd == "pause") { opcode = kAVCTapePlayOpcode; operand = 0x7D; }
+                    else if (cmd == "toggle-play") {
+                        UInt8 mode = 0, state = 0;
+                        bool stable = false;
+                        const bool playing = ReadTransportState(dev, &mode, &state, &stable)
+                            && mode == kAVCTapeTportModePlay
+                            && state != kAVCTapePlayFwdPause && state != kAVCTapePlayRevPause;
+                        opcode = kAVCTapePlayOpcode;
+                        operand = playing ? kAVCTapePlayFwdPause : kAVCTapePlayFwd;
+                        cmd = playing ? "pause" : "play";
+                    }
+                    else if (cmd == "navigate-forward" || cmd == "navigate-back") {
+                        const bool forward = cmd == "navigate-forward";
+                        UInt8 mode = 0, state = 0;
+                        bool stable = false;
+                        // Consult the camera so its physical Play/Stop buttons work too.
+                        // With an unknown state, prefer a picture search to blind winding.
+                        const bool stopped = ReadTransportState(dev, &mode, &state, &stable)
+                            && stable && mode == kAVCTapeTportModeWind && state == kTapeWindStop;
+                        opcode = stopped ? kAVCTapeWindOpcode : kAVCTapePlayOpcode;
+                        operand = stopped ? (forward ? kTapeWindFastFwd : kTapeWindRewind)
+                                          : (forward ? kAVCTapePlayFastestFwd : kAVCTapePlayFastestRev);
+                        cmd = stopped ? (forward ? "fast forward" : "rewind")
+                                      : (forward ? "forward picture search" : "reverse picture search");
+                    }
                     else if (cmd == "rewind") operand = kTapeWindRewind;
                     else if (cmd == "forward") operand = kTapeWindFastFwd;
                     else if (cmd != "stop") valid = false;
                     if (valid && SendTransportOrWarn(dev, opcode, operand, cmd.c_str())) {
+                        reportPause(opcode == kAVCTapePlayOpcode && operand == kAVCTapePlayFwdPause);
+                        nextPauseInquiry = NowMono() + 1.0;
                         transportUsed = true; Info("Transport %s: accepted", cmd.c_str());
                     }
                 }
                 if (pendingCommands.size() > 1024) pendingCommands.clear();
+            }
+            // Also follow the deck buttons, including a deck already paused on connection.
+            if (NowMono() >= nextPauseInquiry) {
+                UInt8 mode = 0, state = 0;
+                bool stable = false;
+                if (ReadTransportState(dev, &mode, &state, &stable) && stable)
+                    reportPause(mode == kAVCTapeTportModePlay &&
+                                (state == kAVCTapePlayFwdPause || state == kAVCTapePlayRevPause));
+                nextPauseInquiry = NowMono() + 0.5;
             }
         }
 
@@ -1771,7 +1814,7 @@ static void Usage(FILE *f)
 "  --until <timecode>  Stop once the tape timecode passes this point\n"
 "  --overlap <sec>     Pre-/post-roll kept around --seek/--until    (default: 4)\n"
 "  --low-latency       DV: deliver 20 ms receive segments for live preview\n"
-"  --stdin-control     Accept play/pause/stop/rewind/forward lines on stdin\n"
+"  --stdin-control     Accept play/pause/toggle-play/stop/rewind/forward/navigate-forward/navigate-back\n"
 "  --no-control        Do NOT send AV/C PLAY/STOP (press play on the deck yourself)\n"
 "  -v, --verbose       Also print the framework's internal log on stderr\n"
 "  [output]            File to write. Omit to auto-name from the recording's\n"

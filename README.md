@@ -1,6 +1,6 @@
 # DV Capture
 
-A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.7**.
+A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.7.4**.
 
 ![DV Capture showing a paused skateboarding frame in the live preview, tape transport below, and import controls on the right](docs/images/dv-capture.png)
 
@@ -45,7 +45,9 @@ To install for all local accounts, copy the built app to `/Applications` with ad
 4. Start Capture, then Stop & Save. Wait for the MOV export to finish.
 5. Show MOV reveals the editor-ready result. The original DV and any corrected DV copy are in the same folder.
 
-Capture also works without preview. Tape winding may not produce pictures. Transport controls are disabled while recording. Preview volume/mute never affect recorded audio. Live monitoring plays the first stereo pair; captures and full MOV exports preserve all recognized audio tracks.
+With the capture window active, use Left Arrow or J for reverse, Right Arrow or L for forward, K to pause, and Space or the Pause key to toggle playback. R starts capture. After editing File name or Duration, press Return or Esc, or click the video preview, to keep the edit and return to shortcuts.
+
+Capture also works without preview. During playback, Rewind and Forward request reverse or forward picture search. Press Play to resume normal playback. For full-speed tape winding, press Stop first. Search pictures depend on the deck’s FireWire output. Transport controls are disabled while recording. Pausing tape playback silences the audio monitor until playback resumes. Preview volume/mute never affect recorded audio. Live monitoring plays the first stereo pair; captures and full MOV exports preserve all recognized audio tracks.
 
 Quitting during capture waits for saving and automatic export. Empty captures are not exported. An export failure leaves the original DV available; use Export MOV + Audio to retry or process an older recording.
 
