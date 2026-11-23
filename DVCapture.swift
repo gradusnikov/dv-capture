@@ -445,7 +445,7 @@ final class CaptureModel: ObservableObject {
                     (report.contains("Saved corrected DV:") ? "MOV + corrected DV saved" : (report.contains("Recovered") ? "MOV saved · audio corrected" : "MOV saved with audio"))
                 if preview { NSWorkspace.shared.open(destination) }
                 else if !automatic { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
-            } else { self.status = "Original DV kept · automatic export failed · see details or retry Export MOV + Audio" }
+            } else { self.status = "MOV export failed · original DV saved. See capture details." }
             try? self.log.write(to: file.appendingPathExtension("log"), atomically: true, encoding: .utf8)
         }
     }
@@ -514,134 +514,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct CaptureView: View {
     @ObservedObject var model: CaptureModel
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                Image(systemName: "video.fill").font(.system(size: 34)).foregroundStyle(.teal)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("DV Capture").font(.system(size: 28, weight: .bold))
-                    Text("Original footage. Straight from your camera.").foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("RAW DV").font(.caption.monospaced().bold()).padding(8).background(.teal.opacity(0.12), in: Capsule())
-            }
-            GroupBox {
-                HStack {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(model.status).font(.headline)
-                        Text(model.camera).font(.callout).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Check Camera") { model.checkCamera() }.disabled(model.busy || model.previewing)
-                }.padding(8)
-            }
-            HStack(alignment: .top, spacing: 24) {
-                previewPanel.frame(width: 600)
+            HStack(alignment: .top, spacing: 20) {
+                previewPanel.frame(width: 560)
                 Divider()
-                importPanel.frame(width: 370)
-            }.fixedSize(horizontal: false, vertical: true)
-            DisclosureGroup("Capture details") {
-                ScrollView {
-                    Text(model.log.isEmpty ? "Capture messages appear here." : model.log)
-                        .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                }.frame(height: 150).background(.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+                settingsPanel.frame(width: 265)
             }
-            Text("Quit other capture apps first. After Stop & Save, wait for MOV saved. The original DV is kept as an archive; Export MOV + Audio can retry an export or repair an older recording.")
-                .font(.caption).foregroundStyle(.secondary)
-        }.padding(24).frame(width: 1080)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if !model.log.isEmpty {
+                Divider()
+                DisclosureGroup("Capture details") {
+                    ScrollView {
+                        Text(model.log).font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(height: 100)
+                }
+            }
+        }.padding(20)
     }
+
     private var previewPanel: some View {
-            VStack(spacing: 8) {
-                ZStack {
-                    Color.black
-                    NativePreview(surface: model.previewSurface)
-                    if !model.previewing { Text("Camera preview").foregroundColor(.gray) }
-                }.frame(width: 600, height: 450).cornerRadius(8)
-                    .contentShape(Rectangle())
-                    .onTapGesture { NSApp.keyWindow?.makeFirstResponder(nil) }
-                HStack {
-                    Text(model.liveMessage + (model.liveReady && model.previewRate > 0 ? " · \(model.previewRate) fps" : "")).font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button(model.previewing ? "Disconnect Preview" : "Start Live Preview") {
-                        if model.previewing { model.stopLive() } else { model.startLive() }
-                    }.disabled(model.busy || (model.previewing && !model.liveReady))
+        VStack(spacing: 10) {
+            ZStack {
+                Color.black
+                NativePreview(surface: model.previewSurface)
+                if !model.previewing {
+                    Button("Start Live Preview") { model.startLive() }
+                        .disabled(model.busy)
                 }
-                HStack(spacing: 10) {
-                    Button { model.liveCommand("navigate-back") } label: { Label("Rewind", systemImage: "backward.end.fill") }
-                    Button { model.liveCommand("play") } label: { Label("Play", systemImage: "play.fill") }
-                    Button { model.liveCommand("pause") } label: { Label("Pause", systemImage: "pause.fill") }
-                    Button { model.liveCommand("stop") } label: { Label("Stop tape", systemImage: "stop.fill") }
-                    Button { model.liveCommand("navigate-forward") } label: { Label("Forward", systemImage: "forward.end.fill") }
+            }
+            .frame(height: 420).cornerRadius(6).contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded { NSApp.keyWindow?.makeFirstResponder(nil) })
+
+            HStack(spacing: 6) {
+                Group {
+                    Button { model.liveCommand("navigate-back") } label: { Label("Rewind", systemImage: "backward.fill") }.help("Rewind (← or J)")
+                    Button { model.liveCommand("play") } label: { Label("Play", systemImage: "play.fill") }.help("Play")
+                    Button { model.liveCommand("pause") } label: { Label("Pause", systemImage: "pause.fill") }.help("Pause (K)")
+                    Button { model.liveCommand("stop") } label: { Label("Stop tape", systemImage: "stop.fill") }.help("Stop tape")
+                    Button { model.liveCommand("navigate-forward") } label: { Label("Forward", systemImage: "forward.fill") }.help("Forward (→ or L)")
                 }.disabled(!model.liveReady || model.recording)
-                HStack {
-                    Button { model.muted.toggle() } label: {
-                        Label(model.muted ? "Unmute" : "Mute", systemImage: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    }
-                    Slider(value: $model.monitorVolume, in: 0...1).frame(width: 140).accessibilityLabel("Preview volume")
-                    Text(model.audioMessage).font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                }.disabled(!model.previewing)
-                Text("← / J reverse · → / L forward · K pause · Space play/pause · R capture. Stop tape first for full-speed winding.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-    }
-    private var importPanel: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Text("Import footage").font(.title2.bold())
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Save to").frame(width: 80, alignment: .leading)
-                    Text(model.folder.path).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Choose Folder…") { model.chooseFolder() }
-                }
-                HStack {
-                    Text("File name").frame(width: 80, alignment: .leading)
-                    TextField("VX1000", text: $model.name)
-                        .help("Press Return or Esc to finish editing and use the tape shortcuts.")
-                }
-                HStack {
-                    Text("Duration").frame(width: 80, alignment: .leading)
-                    TextField("0", text: $model.seconds).frame(width: 70)
-                        .help("Press Return or Esc to finish editing and use the tape shortcuts.")
-                    Text("seconds · 0 = until stopped").foregroundStyle(.secondary)
-                }
-                Toggle("Start and stop tape playback automatically", isOn: $model.controlTape)
-                Text(model.controlTape ? "Set the camera to VTR. Capture sends Play; stopping sends Stop." : "Press Play on the camera for tape capture, or use CAMERA mode for live video.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.disabled(model.busy)
-            HStack(alignment: .center, spacing: 24) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(String(format: "%02d:%02d", model.elapsed / 60, model.elapsed % 60)).font(.system(size: 32, weight: .medium, design: .monospaced))
-                    Text(ByteCountFormatter.string(fromByteCount: model.bytes, countStyle: .file) + " saved").foregroundStyle(.secondary)
-                }
                 Spacer()
-                if model.recording {
-                    Button { model.stop() } label: { Label(model.stopping ? "Saving…" : "Stop & Save", systemImage: "stop.fill").frame(width: 140) }
-                        .buttonStyle(.borderedProminent).tint(.red).disabled(model.stopping)
-                } else {
-                    Button { model.start() } label: { Label("Start Capture", systemImage: "record.circle").frame(width: 140) }
-                        .buttonStyle(.borderedProminent).tint(.teal).disabled(model.busy)
+                Button { model.muted.toggle() } label: {
+                    Label(model.muted ? "Unmute" : "Mute", systemImage: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                }.disabled(!model.previewing).help(model.audioMessage)
+                Slider(value: $model.monitorVolume, in: 0...1)
+                    .frame(width: 82).accessibilityLabel("Preview volume").disabled(!model.previewing)
+            }.labelStyle(.iconOnly)
+            if model.previewing {
+                HStack {
+                    Text(model.liveMessage + (model.liveReady && model.previewRate > 0 ? " · \(model.previewRate) fps" : ""))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Disconnect") { model.stopLive() }.disabled(model.busy || !model.liveReady)
                 }
             }
-            VStack(alignment: .leading, spacing: 10) {
-              HStack {
-                Button("Open DV…") { model.openCapture() }.disabled(model.busy)
-                Button(model.lastMOV == nil ? "Show File" : "Show MOV") { model.reveal() }.disabled(model.lastFile == nil || model.busy)
-              }
-              HStack {
-                Button("Export MOV + Audio") { model.exportAudio() }.disabled(model.bytes == 0 || model.busy)
-                Button("Play 15-second Preview") { model.preview() }.disabled(model.bytes == 0 || model.busy)
-                Spacer()
-                if model.busy { ProgressView().controlSize(.small) }
-              }
-            }
-            Text("Each capture saves a MOV and, when needed, a corrected DV copy. The original DV is kept. Video is never re-encoded.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 
+    private var settingsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Capture").font(.title2.weight(.semibold))
+            Group {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Save to")
+                    Button { model.chooseFolder() } label: {
+                        HStack {
+                            Label(model.folder.lastPathComponent, systemImage: "folder")
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Image(systemName: "ellipsis")
+                        }
+                    }.help(model.folder.path).accessibilityLabel("Choose destination folder, " + model.folder.path)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("File name prefix")
+                    TextField("VX1000", text: $model.name).labelsHidden().accessibilityLabel("File name prefix")
+                }
+                HStack {
+                    Text("Duration")
+                    Spacer()
+                    TextField("0", text: $model.seconds).frame(width: 55).accessibilityLabel("Duration in seconds")
+                    Text(model.seconds == "0" ? "No limit" : "seconds").foregroundStyle(.secondary)
+                }.help("Enter 0 to record until stopped.")
+                Toggle("Control tape during capture", isOn: $model.controlTape)
+                    .help("Play the tape when capture starts and stop it when capture ends.")
+            }.disabled(model.busy)
+            Divider()
+            HStack(alignment: .firstTextBaseline) {
+                Text(String(format: "%02d:%02d", model.elapsed / 60, model.elapsed % 60))
+                    .font(.system(size: 28, weight: .medium)).monospacedDigit()
+                Spacer()
+                if model.bytes > 0 {
+                    Text(ByteCountFormatter.string(fromByteCount: model.bytes, countStyle: .file))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if model.recording {
+                Button { model.stop() } label: {
+                    Label(model.stopping ? "Saving…" : "Stop & Save", systemImage: "stop.fill").frame(maxWidth: .infinity)
+                }.buttonStyle(.borderedProminent).tint(.red).disabled(model.stopping)
+            } else {
+                Button { model.start() } label: {
+                    Label("Start Capture", systemImage: "record.circle").frame(maxWidth: .infinity)
+                }.buttonStyle(.borderedProminent).disabled(model.busy || (model.previewing && !model.liveReady)).help("Start capture (R)")
+            }
+            HStack(alignment: .top) {
+                if model.busy && !model.recording { ProgressView().controlSize(.small) }
+                Text(model.status).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }.help(model.camera)
+            if !model.busy && model.lastFile != nil {
+                Button("Show in Finder") { model.reveal() }
+            }
+        }
+    }
 }
 
 @main struct DVCaptureApp: App {
@@ -651,5 +640,14 @@ struct CaptureView: View {
         Window("DV Capture", id: "capture") {
             CaptureView(model: model).onAppear { delegate.model = model }
         }.windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Open DV…") { model.openCapture() }.disabled(model.busy)
+                Button("Export MOV with Audio…") { model.exportAudio() }.disabled(model.busy || model.bytes == 0)
+                Button("Play 15-second Preview") { model.preview() }.disabled(model.busy || model.bytes == 0)
+                Divider()
+                Button("Check Camera") { model.checkCamera() }.disabled(model.busy || model.previewing)
+            }
+        }
     }
 }
