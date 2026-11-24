@@ -254,6 +254,8 @@ pub fn run(engine_path: &Path) -> Result<()> {
                 let mut state = paused.lock().unwrap();
                 *state = line.ends_with("on");
                 emit(json!({"event":"monitor_pause","paused":*state}));
+            } else if let Some(token) = line.strip_prefix("DV end detected ") {
+                emit(json!({"event":"tape_end","token":token}));
             } else {
                 emit(json!({"event":"log","message":line}));
                 if line.contains("Capturing") {
@@ -326,9 +328,19 @@ pub fn run(engine_path: &Path) -> Result<()> {
                         path: path.clone(),
                         file,
                     });
+                    if let Some(token) = cmd["end_token"].as_str() {
+                        if token.len() == 36
+                            && token.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-')
+                        {
+                            writeln!(control, "watch-end {token}")?;
+                        }
+                    }
                     emit(json!({"event":"recording","path":path}));
                 }
-                Some("save") => finish(&rec)?,
+                Some("save") => {
+                    finish(&rec)?;
+                    writeln!(control, "unwatch-end")?;
+                }
                 Some(
                     action @ ("play" | "pause" | "toggle-play" | "stop" | "rewind" | "forward"
                     | "navigate-back" | "navigate-forward"),

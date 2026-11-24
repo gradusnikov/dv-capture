@@ -92,9 +92,28 @@ final class CaptureModel: ObservableObject {
     @Published var folder = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "captureFolder") ?? NSHomeDirectory() + "/Movies") {
         didSet { UserDefaults.standard.set(folder.path, forKey: "captureFolder") }
     }
-    @Published var name = "VX1000"
-    @Published var seconds = "0"
-    @Published var controlTape = false
+    @Published var name = UserDefaults.standard.string(forKey: "captureName") ?? "VX1000" {
+        didSet { if let validName { UserDefaults.standard.set(validName, forKey: "captureName") } }
+    }
+    private var validName: String? {
+        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, !cleaned.contains("/"), !cleaned.contains(":"), !cleaned.contains("\0") else { return nil }
+        return cleaned
+    }
+    @Published var seconds = String(UserDefaults.standard.integer(forKey: "captureSeconds")) {
+        didSet { if let validDuration { UserDefaults.standard.set(validDuration, forKey: "captureSeconds") } }
+    }
+    private var validDuration: Int? {
+        guard let duration = Int(seconds), (0...86400).contains(duration) else { return nil }
+        return duration
+    }
+    @Published var stopAtEnd = UserDefaults.standard.object(forKey: "stopAtEnd") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(stopAtEnd, forKey: "stopAtEnd") }
+    }
+    private var endToken: String?
+    @Published var controlTape = UserDefaults.standard.bool(forKey: "controlTape") {
+        didSet { UserDefaults.standard.set(controlTape, forKey: "controlTape") }
+    }
     @Published var busy = false
     @Published var recording = false
     @Published var stopping = false
@@ -105,6 +124,7 @@ final class CaptureModel: ObservableObject {
     @Published var bytes: Int64 = 0
     @Published var lastFile: URL?
     @Published var lastMOV: URL?
+    private var endedWithFootage = false
     private var captureHadWarnings = false
     private var process: Process?
     private var timer: Timer?
@@ -132,8 +152,18 @@ final class CaptureModel: ObservableObject {
     private var rateStarted = Date()
     @Published var previewRate = 0
     private let audioMonitor = LiveAudioMonitor()
-    @Published var muted = false { didSet { updateMonitorVolume() } }
-    @Published var monitorVolume = 0.5 { didSet { updateMonitorVolume() } }
+    @Published var muted = UserDefaults.standard.bool(forKey: "muted") {
+        didSet {
+            UserDefaults.standard.set(muted, forKey: "muted")
+            updateMonitorVolume()
+        }
+    }
+    @Published var monitorVolume = UserDefaults.standard.object(forKey: "monitorVolume") as? Double ?? 0.5 {
+        didSet {
+            UserDefaults.standard.set(monitorVolume, forKey: "monitorVolume")
+            updateMonitorVolume()
+        }
+    }
     @Published var audioMessage = "Waiting for audio"
     private func updateMonitorVolume() { audioMonitor.setVolume(muted ? 0 : Float(monitorVolume)) }
 
@@ -163,6 +193,7 @@ final class CaptureModel: ObservableObject {
     func liveCommand(_ action: String, path: String? = nil) {
         var command = ["action": action]
         if let path = path { command["path"] = path }
+        if action == "record", let endToken { command["end_token"] = endToken }
         guard let data = try? JSONSerialization.data(withJSONObject: command) else { return }
         do { try liveInput?.write(contentsOf: data + Data([10])) }
         catch { append("Live control failed: \(error.localizedDescription)\n") }
@@ -255,12 +286,19 @@ final class CaptureModel: ObservableObject {
         case "log": append((obj["message"] as? String ?? "") + "\n")
         case "error": status = obj["message"] as? String ?? "Live preview failed"; append(status + "\n")
         case "audio_error": audioMessage = obj["message"] as? String ?? "Live audio unavailable"; append(audioMessage + "\n")
+        case "tape_end":
+            if liveRecording, !stopping, let token = obj["token"] as? String, token == endToken {
+                endedWithFootage = true
+                append("End of recorded footage detected. Saving capture.\n")
+                stop()
+            }
         case "saved": finishLiveRecording()
         default: break
         }
     }
     func finishLiveRecording() {
         guard liveRecording else { return }
+        endToken = nil
         timer?.invalidate(); timer = nil; refreshSize()
         liveRecording = false; busy = false; recording = false; stopping = false
         status = bytes > 0 ? "Capture saved · preview continues" : "No video captured"
@@ -342,14 +380,13 @@ final class CaptureModel: ObservableObject {
     }
     func start() {
         guard !busy else { return }
-        guard let duration = Int(seconds), duration >= 0, duration <= 86400 else {
+        guard let duration = validDuration else {
             status = "Enter a duration from 0 to 86400 seconds."; return
         }
-        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty, !cleaned.contains("/"), !cleaned.contains(":"), !cleaned.contains("\0") else {
+        guard let cleaned = validName else {
             status = "Enter a file name without slashes or colons."; return
         }
-        lastMOV = nil; captureHadWarnings = false
+        lastMOV = nil; captureHadWarnings = false; endedWithFootage = false
         let date = DateFormatter(); date.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let file = folder.appendingPathComponent("\(cleaned)_\(date.string(from: Date()))_\(UUID().uuidString.prefix(6)).dv")
         if previewing {
@@ -357,6 +394,7 @@ final class CaptureModel: ObservableObject {
             lastFile = file; bytes = 0; elapsed = 0; began = Date()
             busy = true; recording = true; liveRecording = true; stopping = false
             status = "Starting capture…"
+            endToken = stopAtEnd ? UUID().uuidString : nil
             liveCommand("record", path: file.path)
             if controlTape { liveCommand("play") }
             timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
@@ -373,7 +411,8 @@ final class CaptureModel: ObservableObject {
         lastFile = file; bytes = 0; elapsed = 0; began = Date()
         busy = true; recording = true; stopping = false; log = ""
         status = "Starting capture…"
-        var args = ["capture", "--format", "dv"]
+        var args = ["capture", "--format", "dv", "--eot-timeout", "0"]
+        if stopAtEnd { args.append("--detect-dv-end") }
         if !controlTape { args += ["--no-control"] }
         if duration > 0 { args += ["--duration", String(duration)] }
         args.append(file.path)
@@ -385,6 +424,7 @@ final class CaptureModel: ObservableObject {
         launch(executable, args) { code, output in
             self.timer?.invalidate(); self.timer = nil; self.refreshSize()
             self.busy = false; self.recording = false; self.stopping = false
+            self.endedWithFootage = output.contains("Done (end of recorded footage)")
             if self.bytes == 0 {
                 self.status = "No video captured"
                 self.append("\nCheck camera mode and playback. Quit other capture apps if the camera is in use.\n")
@@ -445,6 +485,7 @@ final class CaptureModel: ObservableObject {
                 if !preview { self.lastMOV = destination }
                 self.status = self.captureHadWarnings ? "MOV saved · capture warnings in details" :
                     (report.contains("Saved corrected DV:") ? "MOV + corrected DV saved" : (report.contains("Recovered") ? "MOV saved · audio corrected" : "MOV saved with audio"))
+                if automatic && self.endedWithFootage { self.status += " · End of footage" }
                 if preview { NSWorkspace.shared.open(destination) }
                 else if !automatic { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
             } else { self.status = "MOV export failed · original DV saved. See capture details." }
@@ -515,6 +556,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct CaptureView: View {
+    @AppStorage("showCaptureDetails") private var showCaptureDetails = false
     @ObservedObject var model: CaptureModel
 
     var body: some View {
@@ -528,7 +570,7 @@ struct CaptureView: View {
 
             if !model.log.isEmpty {
                 Divider()
-                DisclosureGroup("Capture details") {
+                DisclosureGroup("Capture details", isExpanded: $showCaptureDetails) {
                     ScrollView {
                         Text(model.log).font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
@@ -601,6 +643,8 @@ struct CaptureView: View {
                     TextField("0", text: $model.seconds).frame(width: 55).accessibilityLabel("Duration in seconds")
                     Text(model.seconds == "0" ? "No limit" : "seconds").foregroundStyle(.secondary)
                 }.help("Enter 0 to record until stopped.")
+                Toggle("Stop at end of footage", isOn: $model.stopAtEnd)
+                    .help("Save after 15 seconds without recorded DV progress. Turn off to capture across long blank gaps.")
                 Toggle("Control tape during capture", isOn: $model.controlTape)
                     .help("Play the tape when capture starts and stop it when capture ends.")
             }.disabled(model.busy)

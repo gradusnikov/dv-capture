@@ -53,6 +53,8 @@ $(BIN): $(OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $(OBJS)
 	@echo "Built $@"
 
+$(BUILD)/src/tapecap.o: src/dvend.h
+
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@

@@ -1,6 +1,8 @@
 # DV Capture
 
-A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9**.
+A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9.2**.
+
+DV Capture remembers the destination folder, filename prefix, duration, tape control and end-of-footage settings, preview mute and volume, and whether Capture details is expanded. Each macOS account has its own settings.
 
 ![DV Capture 1.8.1 showing skateboarding footage above the tape controls, with capture settings on the right](docs/images/dv-capture.png)
 
@@ -41,7 +43,7 @@ To install for all local accounts, copy the built app to `/Applications` with ad
 
 1. Quit other capture apps. Connect the camera and select VTR for tape playback or CAMERA for a live feed.
 2. Start Live Preview. Use Play for tape playback.
-3. Choose a destination and file-name prefix. Duration `0` means capture until stopped.
+3. Choose a destination and file-name prefix. Leave Duration at `0` and **Stop at end of footage** enabled for unattended imports. A positive duration sets an additional upper limit.
 4. Start Capture, then Stop & Save. Wait for the MOV export to finish.
 5. Show in Finder reveals the editor-ready result. The original DV and any corrected DV copy are in the same folder.
 
@@ -62,7 +64,7 @@ This is a compatibility workaround, not a claim to fix every damaged DV recordin
 - If the camera is busy, quit iMovie, Final Cut, QuickTime, and other importers. Apple's AVCAssistant can retain a connection. A camera power cycle may be needed after reconnecting.
 - Preview prioritizes recent frames and bounded audio buffering over building a delay under load. Raw recording is independent of preview frame dropping.
 - Audio output latency depends on the selected sound device, particularly Bluetooth.
-- The live session intentionally stays connected during no-data periods. Use a capture duration or Stop & Save.
+- End detection starts with the first complete DV frame. After 15 seconds without frames, capture saves automatically. Once the tape has supplied advancing timecode, an unchanged video and audio payload with frozen or missing timecode also triggers the timeout. Short gaps and timecode resets are tolerated. A longer blank gap can end a capture before a later scene; turn the option off to bridge it. Decks that generate advancing timecode or changing filler may need a duration limit. Live preview stays connected after saving. Enable tape control to also stop the deck.
 - Long uninterrupted tapes, mixed DV modes, and Intel Macs have not been comprehensively tested.
 
 ## Source layout and validation

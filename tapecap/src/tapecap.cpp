@@ -32,6 +32,9 @@
 #include <sys/select.h>
 
 #include "dvmeta.h"
+#include "dvend.h"
+
+static double NowMono();
 
 using namespace AVS;
 
@@ -80,6 +83,20 @@ struct CaptureState
     std::atomic<unsigned long long> wrongMode{0};
     std::atomic<unsigned int>       firstWrongMode{0x100};
     bool        writeError   = false;
+    std::mutex endMutex;
+    DvEndDetector endDetector;
+    bool watchingEnd = false;
+    void watchEnd(bool enable) {
+        std::lock_guard<std::mutex> lock(endMutex);
+        endDetector = DvEndDetector();
+        watchingEnd = enable;
+    }
+    bool takeEnd(double now) {
+        std::lock_guard<std::mutex> lock(endMutex);
+        if (!watchingEnd || !endDetector.expired(now)) return false;
+        watchingEnd = false;
+        return true;
+    }
 
     // Live tape metadata parsed from the stream. The HDV parser is touched only
     // on the callback thread; the snapshots below are shared with the main
@@ -225,6 +242,11 @@ static IOReturn DvFrameProc(DVFrameReceiveMessage msg, DVReceiveFrame *pFrame, v
         tapecap::TapeMeta m;
         if (tapecap::DvParseFrame(pFrame->pFrameData, pFrame->frameLen, &m))
             st->recordMeta(m);
+        {
+            std::lock_guard<std::mutex> lock(st->endMutex);
+            if (st->watchingEnd)
+                st->endDetector.observe(pFrame->pFrameData, pFrame->frameLen, m, NowMono());
+        }
 
         // DVReceiver lends frame buffers to clients. Once we have copied the
         // raw DIF frame out, return the buffer immediately so capture can keep
@@ -1198,6 +1220,7 @@ struct CaptureOptions
     std::string  outPath;                  // empty = auto-name; "-" = stdout
     int          durationSec = 0;          // 0 = until stop condition
     int          eotTimeoutMs = 5000;      // 0 = never auto-stop on silence
+    bool         detectEnd = false;
     bool         lowLatency = false;
     bool         stdinControl = false;
     bool         control     = true;       // send PLAY/STOP
@@ -1213,6 +1236,7 @@ static int CmdCapture(const CaptureOptions &opt)
 {
     CaptureState st;
     st.verbose = opt.verbose;
+    st.watchEnd(opt.detectEnd);
     int eotTimeoutMs = opt.eotTimeoutMs;
     if (opt.seek && eotTimeoutMs > 0 && eotTimeoutMs < 15000)
         eotTimeoutMs = 15000;
@@ -1430,6 +1454,7 @@ static int CmdCapture(const CaptureOptions &opt)
     time_t start = time(nullptr);
     const char *reason = "stopped";
     std::string pendingCommands;
+    std::string endToken;
     bool transportUsed = false;
     bool monitorPaused = false;
     double nextPauseInquiry = 0;
@@ -1453,6 +1478,16 @@ static int CmdCapture(const CaptureOptions &opt)
                 while ((end = pendingCommands.find('\n')) != std::string::npos) {
                     std::string cmd = pendingCommands.substr(0, end);
                     pendingCommands.erase(0, end + 1);
+                    if (cmd.compare(0, 10, "watch-end ") == 0) {
+                        endToken = cmd.substr(10);
+                        st.watchEnd(true);
+                        continue;
+                    }
+                    if (cmd == "unwatch-end") {
+                        st.watchEnd(false);
+                        endToken.clear();
+                        continue;
+                    }
                     UInt8 opcode = kAVCTapeWindOpcode, operand = kTapeWindStop;
                     bool valid = true;
                     if (cmd == "play") { opcode = kAVCTapePlayOpcode; operand = kTapePlayForward; }
@@ -1507,6 +1542,13 @@ static int CmdCapture(const CaptureOptions &opt)
         {
             reason = st.writeError ? "write error" : (gDeviceGone.load() ? "device disconnected" : "interrupted");
             break;
+        }
+        if (st.takeEnd(NowMono())) {
+            if (endToken.empty()) {
+                reason = "end of recorded footage";
+                break;
+            }
+            Info("DV end detected %s", endToken.c_str());
         }
         if (gNoData.load())
         {
@@ -1808,6 +1850,7 @@ static void Usage(FILE *f)
 "  --guid <hex>        Select device by GUID (default: first DV/HDV device)\n"
 "  --format <fmt>      auto | dv | hdv             (default: auto-detect)\n"
 "  --duration <sec>    Stop after N seconds        (default: until Ctrl-C / EOT)\n"
+"  --detect-dv-end     Stop after 15 seconds without DV progress after footage begins\n"
 "  --eot-timeout <ms>  Stop after this much silence; 0 disables   (default: 5000;\n"
 "                      --seek uses at least 15000 for stream startup)\n"
 "  --seek <timecode>   Fast-wind to this tape timecode before capturing\n"
@@ -1916,6 +1959,7 @@ int main(int argc, char **argv)
             if (a == "--guid")             opt.guid = ParseGuid(NextArg(argc, argv, i, "--guid"));
             else if (a == "--format")      opt.format = NextArg(argc, argv, i, "--format");
             else if (a == "--duration")    opt.durationSec = atoi(NextArg(argc, argv, i, "--duration"));
+            else if (a == "--detect-dv-end") opt.detectEnd = true;
             else if (a == "--eot-timeout") opt.eotTimeoutMs = atoi(NextArg(argc, argv, i, "--eot-timeout"));
             else if (a == "--seek")
             {
