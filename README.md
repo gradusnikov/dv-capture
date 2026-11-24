@@ -1,6 +1,6 @@
 # DV Capture
 
-A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.8.1**.
+A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9**.
 
 ![DV Capture 1.8.1 showing skateboarding footage above the tape controls, with capture settings on the right](docs/images/dv-capture.png)
 
@@ -17,7 +17,7 @@ A small native macOS app for capturing DV camcorders over FireWire, with live vi
 ## Requirements
 
 - Apple Silicon Mac running macOS 13–15 with a working FireWire connection.
-- The release bundles tapecap, Python, FFmpeg and ffprobe.
+- The release bundles tapecap, a native Rust media helper, FFmpeg and ffprobe.
 
 ## Download and install
 
@@ -27,13 +27,13 @@ The app is ad-hoc signed. macOS may require first-launch approval. Hardware test
 
 ## Build
 
-Building from source requires an Apple Silicon Mac, Xcode Command Line Tools with the legacy FireWire SDK headers, and internet access for the pinned Python and FFmpeg downloads.
+Building from source requires an Apple Silicon Mac, Xcode Command Line Tools with the legacy FireWire SDK headers, a recent stable Rust toolchain (Cargo and the aarch64-apple-darwin target), and internet access for the locked Rust dependencies and FFmpeg source.
 
 ```sh
 ./build.sh
 ```
 
-The resulting app is `build/DV Capture.app`. The script builds the bundled tapecap backend and SwiftUI app, copies Python helpers and third-party license notices, and applies an ad-hoc signature. It is not notarized.
+The resulting app is `build/DV Capture.app`. The script builds the bundled tapecap backend and SwiftUI app, compiles the Rust media helper and copies FFmpeg tools and third-party license notices, and applies an ad-hoc signature. It is not notarized.
 
 To install for all local accounts, copy the built app to `/Applications` with administrator authorization.
 
@@ -68,8 +68,8 @@ This is a compatibility workaround, not a claim to fix every damaged DV recordin
 ## Source layout and validation
 
 - `DVCapture.swift`: SwiftUI window, capture lifecycle, native video rendering, and audio monitoring.
-- `live_session.py`: shared camera session, independent raw recording, video/audio preview decoders.
-- `audio_export.py`: metadata recovery and non-destructive DV/MOV export.
+- `media/src/live.rs`: shared camera session, independent raw recording, video/audio preview decoders.
+- `media/src/export.rs`: metadata recovery and non-destructive DV/MOV export.
 - `tapecap/`: vendored capture backend and its upstream documentation/licenses.
 
 Validated locally with a Sony VX1000: 25 fps preview, live audio, transport commands, timed capture, automatic MOV/corrected-DV export, empty capture handling, and waiting for export on quit. Recovery validation checked unchanged source files, changes confined to matched metadata bytes, recognized audio tracks, and identical decoded video pixels. Media fixtures and personal recordings are intentionally not included.

@@ -1,0 +1,10 @@
+[package]
+name = "dv-media"
+version = "1.9.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+libc = "0.2"
+serde_json = "1"

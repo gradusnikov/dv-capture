@@ -14,8 +14,8 @@ Vendored by tapecap from Apple's FireWire SDK 26 sample code. Original source he
 
 The release includes FFmpeg and ffprobe 7.1.3, built from the unmodified [FFmpeg release source](https://ffmpeg.org/releases/ffmpeg-7.1.3.tar.xz) under LGPL 2.1 or later. The same source archive accompanies the binary release. See `bundle-runtime.sh` for configuration and build commands. The helpers invoke the executables as separate processes.
 
-## Python
+## Rust media helper
 
-The app bundles CPython 3.12.11 from [python-build-standalone release 20250818](https://github.com/astral-sh/python-build-standalone/releases/tag/20250818). The build script verifies the Apple Silicon archive checksum. The app includes the Python license and component notices from the corresponding full distribution under Resources/Licenses.
+Cargo.lock in the media directory pins the dependencies used by dv-media. License notices for the linked crates and Rust standard library are in licenses/rust and in the app’s Resources/Licenses directory.
 
-The third-party licenses apply to their respective components; no separate license has yet been selected for the app-specific Swift/Python code.
+The third-party licenses apply to their respective components; no separate license has yet been selected for the app-specific Swift/Rust code.

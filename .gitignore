@@ -1,6 +1,7 @@
 # Build products and local caches
 build/
 build-cache/
+media/target/
 *.app/
 __pycache__/
 *.pyc
