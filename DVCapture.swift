@@ -88,7 +88,14 @@ final class LiveAudioMonitor {
     }
 }
 
+enum MOVQuality: String {
+    case full, streaming
+}
+
 final class CaptureModel: ObservableObject {
+    @Published var movQuality = MOVQuality(rawValue: UserDefaults.standard.string(forKey: "movQuality") ?? "") ?? .full {
+        didSet { UserDefaults.standard.set(movQuality.rawValue, forKey: "movQuality") }
+    }
     @Published var folder = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "captureFolder") ?? NSHomeDirectory() + "/Movies") {
         didSet { UserDefaults.standard.set(folder.path, forKey: "captureFolder") }
     }
@@ -460,7 +467,7 @@ final class CaptureModel: ObservableObject {
     func openCapture() {
         guard !busy else { return }
         let panel = NSOpenPanel()
-        panel.allowedFileTypes = ["dv"]
+        panel.allowedFileTypes = ["dv", "mov"]
         panel.directoryURL = folder
         if panel.runModal() == .OK, let file = panel.url {
             lastFile = file; lastMOV = nil; captureHadWarnings = false; refreshSize(); status = "Recording selected · ready to export"
@@ -477,8 +484,7 @@ final class CaptureModel: ObservableObject {
             output = file.deletingPathExtension().appendingPathExtension("audio-\(UUID().uuidString.prefix(6)).mov")
         }
         let destination = output
-        var args = ["export", file.path, output.path]
-        if preview { args.append("preview") }
+        let args = ["export", file.path, output.path, preview ? "preview" : movQuality.rawValue]
         launch(mediaHelper, args) { code, report in
             self.busy = false
             if code == 0, FileManager.default.fileExists(atPath: output.path) {
@@ -643,6 +649,10 @@ struct CaptureView: View {
                     TextField("0", text: $model.seconds).frame(width: 55).accessibilityLabel("Duration in seconds")
                     Text(model.seconds == "0" ? "No limit" : "seconds").foregroundStyle(.secondary)
                 }.help("Enter 0 to record until stopped.")
+                Picker("MOV quality", selection: $model.movQuality) {
+                    Text("Full quality").tag(MOVQuality.full)
+                    Text("For streaming").tag(MOVQuality.streaming)
+                }.pickerStyle(.menu)
                 Toggle("Stop at end of footage", isOn: $model.stopAtEnd)
                     .help("Save after 15 seconds without recorded DV progress. Turn off to capture across long blank gaps.")
                 Toggle("Control tape during capture", isOn: $model.controlTape)
@@ -687,7 +697,7 @@ struct CaptureView: View {
         }.windowResizability(.contentSize)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Open DV…") { model.openCapture() }.disabled(model.busy)
+                Button("Open DV or MOV…") { model.openCapture() }.disabled(model.busy)
                 Button("Export MOV with Audio…") { model.exportAudio() }.disabled(model.busy || model.bytes == 0)
                 Button("Play 15-second Preview") { model.preview() }.disabled(model.busy || model.bytes == 0)
                 Divider()

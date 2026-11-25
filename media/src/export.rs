@@ -4,7 +4,7 @@ use std::{
     io::{self, Read, Seek, Write},
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 // A private staging directory on the destination volume. Incomplete MOVs are
@@ -114,28 +114,76 @@ fn recover(src: &Path, repaired: &Path) -> Result<usize> {
     Ok(total)
 }
 
-pub fn run(src: &Path, dst: &Path, preview: bool) -> Result<()> {
+fn frame_seconds(pal: bool) -> f64 {
+    if pal {
+        1.0 / 25.0
+    } else {
+        1001.0 / 30000.0
+    }
+}
+
+#[derive(PartialEq)]
+pub enum Mode {
+    Full,
+    Streaming,
+    Preview,
+}
+
+pub fn run(src: &Path, dst: &Path, mode: Mode) -> Result<()> {
+    let preview = mode == Mode::Preview;
     if dst.exists() {
         return Err("Output already exists; choose a new file name.".into());
     }
-    let mut input = File::open(src)?;
-    let mut header = [0; 4];
-    input.read_exact(&mut header)?;
-    let pal = header[3] & 0x80 != 0;
-    if header[0] >> 5 != 0 || input.metadata()?.len() < if pal { 144000 } else { 120000 } {
-        return Err("This is not a complete raw DV recording.".into());
-    }
+    let from_mov = src
+        .extension()
+        .is_some_and(|s| s.eq_ignore_ascii_case("mov"));
+    let (pal, duration) = if from_mov {
+        let info = Command::new(media_tool("ffprobe")?)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,height,nb_frames",
+                "-of",
+                "default=nw=1",
+            ])
+            .arg(src)
+            .output()?;
+        let fields = String::from_utf8(info.stdout)?;
+        if !info.status.success() || !fields.lines().any(|line| line == "codec_name=dvvideo") {
+            return Err("Recovery requires a MOV with its original DV video track.".into());
+        }
+        let pal = fields.lines().any(|line| line == "height=576");
+        let frames: u64 = fields
+            .lines()
+            .find_map(|line| line.strip_prefix("nb_frames="))
+            .ok_or("Missing MOV frame count")?
+            .parse()?;
+        (pal, frames as f64 * frame_seconds(pal))
+    } else {
+        let mut input = File::open(src)?;
+        let mut header = [0; 4];
+        input.read_exact(&mut header)?;
+        let pal = header[3] & 0x80 != 0;
+        let frames = input.metadata()?.len() / if pal { 144000 } else { 120000 };
+        if header[0] >> 5 != 0 || frames == 0 {
+            return Err("This is not a complete raw DV recording.".into());
+        }
+        (pal, frames as f64 * frame_seconds(pal))
+    };
     let scratch = Scratch::new(dst.parent().unwrap_or(Path::new(".")))?;
     let fixed = scratch.0.join("recovered.dv");
     let mut media = src.to_owned();
-    if pal {
+    if pal && !from_mov {
         let count = recover(src, &fixed)?;
         if count > 0 {
             println!("Recovered {count} malformed audio-source packs.");
             media = fixed.clone();
         }
     }
-    if audio_tracks(&media)? == 0 {
+    if !from_mov && audio_tracks(&media)? == 0 {
         return Err("No recoverable audio track found.".into());
     }
     if media == fixed && !preview {
@@ -171,19 +219,68 @@ pub fn run(src: &Path, dst: &Path, preview: bool) -> Result<()> {
     }
     let staged = scratch.0.join("export.mov");
     let mut cmd = Command::new(media_tool("ffmpeg")?);
+    cmd.args(["-hide_banner", "-loglevel", "warning", "-nostdin", "-n"]);
+    let mut extractor = None;
+    if from_mov {
+        // These exports copied the complete DV packets, including embedded audio.
+        // Demux them again to recover the original frame-relative audio timestamps.
+        let mut reader = Command::new(media_tool("ffmpeg")?)
+            .args(["-v", "error", "-nostdin", "-i"])
+            .arg(src)
+            .args([
+                "-map",
+                "0:v:0",
+                "-c:v",
+                "copy",
+                "-f",
+                "image2pipe",
+                "pipe:1",
+            ])
+            .stdout(Stdio::piped())
+            .spawn()?;
+        cmd.stdin(reader.stdout.take().unwrap())
+            .args(["-f", "dv", "-i", "pipe:0"]);
+        extractor = Some(reader);
+    } else {
+        cmd.arg("-i").arg(&media);
+    }
+    // Place silence at DV packet timestamp gaps, including the end of the tape.
+    let length = if preview {
+        duration.min(15.0)
+    } else {
+        duration
+    };
     cmd.args([
-        "-hide_banner",
-        "-loglevel",
-        "warning",
-        "-nostdin",
-        "-n",
-        "-i",
-    ])
-    .arg(&media);
+        "-af",
+        &format!("aresample=async=1:first_pts=0:min_hard_comp=0.001,apad=whole_dur={length:.9}"),
+    ]);
     if preview {
         cmd.args([
             "-t", "15", "-map", "0:v:0", "-map", "0:a:0", "-c:v", "mpeg4", "-q:v", "3", "-pix_fmt",
             "yuv420p", "-c:a", "aac", "-b:a", "192k",
+        ]);
+    } else if mode == Mode::Streaming {
+        cmd.args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a",
+            "-vf",
+            "bwdif=mode=send_frame",
+            "-c:v",
+            "h264_videotoolbox",
+            "-allow_sw",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
+            "-b:v",
+            "2500k",
+            "-g",
+            if pal { "50" } else { "60" },
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
         ]);
     } else {
         cmd.args([
@@ -197,7 +294,7 @@ pub fn run(src: &Path, dst: &Path, preview: bool) -> Result<()> {
             "pcm_s16le",
         ]);
     }
-    if !cmd
+    let result = cmd
         .args([
             "-r",
             if pal { "25" } else { "30000/1001" },
@@ -205,9 +302,15 @@ pub fn run(src: &Path, dst: &Path, preview: bool) -> Result<()> {
             "+faststart",
         ])
         .arg(&staged)
-        .status()?
-        .success()
-    {
+        .status();
+    drop(cmd);
+    if let Some(mut reader) = extractor {
+        let status = reader.wait()?;
+        if !preview && !status.success() {
+            return Err("DV extraction from MOV failed.".into());
+        }
+    }
+    if !result?.success() {
         return Err("FFmpeg export failed".into());
     }
     let tracks = audio_tracks(&staged)?;

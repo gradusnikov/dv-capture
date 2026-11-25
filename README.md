@@ -1,8 +1,8 @@
 # DV Capture
 
-A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9.2**.
+A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9.4**.
 
-DV Capture remembers the destination folder, filename prefix, duration, tape control and end-of-footage settings, preview mute and volume, and whether Capture details is expanded. Each macOS account has its own settings.
+DV Capture remembers the destination folder, filename prefix, duration, MOV quality, tape control and end-of-footage settings, preview mute and volume, and whether Capture details is expanded. Each macOS account has its own settings.
 
 ![DV Capture 1.8.1 showing skateboarding footage above the tape controls, with capture settings on the right](docs/images/dv-capture.png)
 
@@ -13,7 +13,7 @@ DV Capture remembers the destination folder, filename prefix, duration, tape con
 - Live stereo audio monitoring, mute, and volume controls.
 - Play, pause, stop, rewind, and fast-forward in VTR mode.
 - Raw DV capture with optional duration limit and automatic tape playback.
-- Automatic MOV export with copied DV video and uncompressed PCM audio.
+- Choose **Full quality** (default) for editing and archiving with original DV video and uncompressed audio. **For streaming** produces a smaller MOV with progressive H.264 video and AAC audio. The selection applies to automatic and manual exports. Raw DV capture is unchanged.
 - Narrow repair of an observed Sony VX1000 PAL audio-metadata defect. When needed, also saves a separate `.corrected.dv`; the original `.dv` remains untouched.
 
 ## Requirements
@@ -53,9 +53,11 @@ Capture also works without preview. During playback, Rewind and Forward request 
 
 Quitting during capture waits for saving and automatic export. Empty captures are not exported. An export failure leaves the original DV available; use File → Export MOV with Audio to retry or process an older recording.
 
+For older DV Capture MOVs with early audio, use File → Open DV or MOV, then Export MOV with Audio. The app reads audio from the embedded DV frames and writes a separate MOV, preserving silence at gaps.
+
 ## Audio repair boundaries
 
-The observed PAL VX1000 defect is matched only in audio DIF blocks with source pack `0x40`, byte 3 of the pack `0xe0`, and byte 4 `0xc1`. Repair changes the source ID to `0x50` and the sample-rate/quantization byte to `0xd1` (32 kHz, 12-bit nonlinear). Video and audio sample bytes are not modified. Full export decodes audio to PCM; video is copied without re-encoding. The helper scans the full PAL capture so it can repair later scenes even when the first scene already has recognized audio.
+The observed PAL VX1000 defect is matched only in audio DIF blocks with source pack `0x40`, byte 3 of the pack `0xe0`, and byte 4 `0xc1`. Repair changes the source ID to `0x50` and the sample-rate/quantization byte to `0xd1` (32 kHz, 12-bit nonlinear). Video and audio sample bytes are not modified. Full quality export decodes audio to PCM; video is copied without re-encoding. The helper scans the full PAL capture so it can repair later scenes even when the first scene already has recognized audio.
 
 This is a compatibility workaround, not a claim to fix every damaged DV recording. Unknown missing-audio cases fail explicitly. The underlying fault has not been conclusively localized: diagnostics found the malformed bytes in the FireWire receive payload before frame assembly in both tape and live CAMERA modes. Camera output and the host transport/driver chain still need cross-testing.
 

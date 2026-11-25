@@ -40,11 +40,22 @@ fn main() {
         [cmd, engine] if cmd == "live" => {
             live::run(Path::new(engine)).inspect_err(|e| live::error(&e.to_string()))
         }
-        [cmd, src, dst] if cmd == "export" => export::run(src.as_ref(), dst.as_ref(), false),
-        [cmd, src, dst, mode] if cmd == "export" && mode == "preview" => {
-            export::run(src.as_ref(), dst.as_ref(), true)
+        [cmd, src, dst] if cmd == "export" => {
+            export::run(src.as_ref(), dst.as_ref(), export::Mode::Full)
         }
-        _ => Err("Usage: dv-media live TAPECAP | export INPUT.dv OUTPUT.mov [preview]".into()),
+        [cmd, src, dst, mode] if cmd == "export" && mode == "preview" => {
+            export::run(src.as_ref(), dst.as_ref(), export::Mode::Preview)
+        }
+        [cmd, src, dst, mode] if cmd == "export" && mode == "full" => {
+            export::run(src.as_ref(), dst.as_ref(), export::Mode::Full)
+        }
+        [cmd, src, dst, mode] if cmd == "export" && mode == "streaming" => {
+            export::run(src.as_ref(), dst.as_ref(), export::Mode::Streaming)
+        }
+        _ => Err(
+            "Usage: dv-media live TAPECAP | export INPUT OUTPUT.mov [full|streaming|preview]"
+                .into(),
+        ),
     };
     if let Err(e) = result {
         eprintln!("DV media error: {e}");

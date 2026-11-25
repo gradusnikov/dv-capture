@@ -22,8 +22,8 @@ tar -xf "$vendor/ffmpeg.tar.xz" -C "$vendor"
         --disable-ffplay --disable-everything --enable-ffmpeg --enable-ffprobe \
         --enable-protocol=file,pipe --enable-demuxer=dv,mov \
         --enable-muxer=mov,image2pipe,pcm_s16le --enable-decoder=dvvideo,pcm_s16le \
-        --enable-encoder=pcm_s16le,mjpeg,aac,mpeg4 --enable-parser=mpeg4video \
-        --enable-filter=bwdif,scale,format,aresample,aformat,trim,atrim,null,anull \
+        --enable-videotoolbox --enable-encoder=h264_videotoolbox,pcm_s16le,mjpeg,aac,mpeg4 --enable-parser=mpeg4video \
+        --enable-filter=bwdif,scale,format,aresample,apad,aformat,trim,atrim,null,anull \
         --enable-swscale --enable-swresample --cc=clang \
         --extra-cflags=-mmacosx-version-min=13.0 --extra-ldflags=-mmacosx-version-min=13.0
     make -j"$(sysctl -n hw.ncpu || echo 4)" ffmpeg ffprobe
