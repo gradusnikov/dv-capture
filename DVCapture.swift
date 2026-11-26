@@ -178,13 +178,34 @@ final class CaptureModel: ObservableObject {
         }
     }
 
-    func liveCommand(_ action: String, path: String? = nil) {
+    @Published var tapeTimecode = "—"
+    @Published var recordedAt = "—"
+    @Published var seekTarget = ""
+    @Published var seeking = false
+    var targetSeconds: Int? {
+        let parts = seekTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts.allSatisfy({ (1...2).contains($0.count) && $0.utf8.allSatisfy { (48...57).contains($0) } }),
+              let h = Int(parts[0]), let m = Int(parts[1]), let s = Int(parts[2]),
+              h < 24, m < 60, s < 60 else { return nil }
+        return h * 3600 + m * 60 + s
+    }
+    func seek() {
+        guard liveReady, !busy, !seeking, let target = targetSeconds else { return }
+        seeking = true
+        status = "Seeking to " + seekTarget + "…"
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        liveCommand("seek", seconds: target)
+    }
+
+    func liveCommand(_ action: String, path: String? = nil, seconds: Int? = nil) {
         var command = ["action": action]
+        if let seconds { command["seconds"] = String(seconds) }
         if let path = path { command["path"] = path }
         if action == "record", let endToken { command["end_token"] = endToken }
         guard let data = try? JSONSerialization.data(withJSONObject: command) else { return }
         do { try liveInput?.write(contentsOf: data + Data([10])) }
-        catch { append("Live control failed: \(error.localizedDescription)\n") }
+        catch { if action == "seek" { seeking = false; status = "Seek command failed" }; append("Live control failed: \(error.localizedDescription)\n") }
     }
     func startLive() {
         guard !busy, !previewing else { return }
@@ -287,6 +308,7 @@ final class CaptureModel: ObservableObject {
                 self.previewLock.lock(); self.pendingSample = nil; self.previewLock.unlock()
                 self.liveTimer?.invalidate(); self.liveTimer = nil
                 self.liveProcess = nil; self.liveInput = nil
+                self.tapeTimecode = "—"; self.recordedAt = "—"; self.seeking = false
                 self.previewing = false; self.liveReady = false
                 self.liveMessage = "Preview disconnected"
                 if self.liveRecording { self.finishLiveRecording() }
@@ -296,6 +318,17 @@ final class CaptureModel: ObservableObject {
     }
     func liveEvent(_ obj: [String: Any]) {
         switch obj["event"] as? String {
+        case "metadata":
+            tapeTimecode = (obj["timecode"] as? String).flatMap { $0 == "-" ? nil : $0 } ?? "—"
+            recordedAt = (obj["recorded"] as? String).flatMap { $0 == "-" ? nil : $0 } ?? "—"
+        case "seek_result":
+            seeking = false
+            switch obj["result"] as? String {
+            case "reached": status = "Tape positioned near " + seekTarget
+            case "approximate": status = "Tape stopped at an estimated position"
+            case "cancelled": status = "Seek cancelled"
+            default: status = "Could not reach the requested timecode"
+            }
         case "ready": liveReady = true; camera = "DV · FireWire connected"; status = "Live preview connected"
         case "log": append((obj["message"] as? String ?? "") + "\n")
         case "error": status = obj["message"] as? String ?? "Live preview failed"; append(status + "\n")
@@ -393,7 +426,7 @@ final class CaptureModel: ObservableObject {
         }
     }
     func start() {
-        guard !busy else { return }
+        guard !busy, !seeking else { return }
         guard let duration = validDuration else {
             status = "Enter a duration from 0 to 86400 seconds."; return
         }
@@ -532,7 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if !event.isARepeat { model.start() }
                 return nil
             }
-            guard model.liveReady, !model.recording else { return event }
+            guard model.liveReady, !model.recording, !model.seeking else { return event }
             let action: String
             switch key {
             case "\u{F702}", "j": action = "navigate-back"
@@ -607,6 +640,27 @@ struct CaptureView: View {
             .frame(height: 420).cornerRadius(6).contentShape(Rectangle())
             .simultaneousGesture(TapGesture().onEnded { NSApp.keyWindow?.makeFirstResponder(nil) })
 
+            HStack(spacing: 12) {
+                VStack(alignment: .leading) {
+                    Text("Tape timecode").font(.caption).foregroundStyle(.secondary)
+                    Text(model.tapeTimecode).monospacedDigit()
+                }
+                VStack(alignment: .leading) {
+                    Text("Recorded").font(.caption).foregroundStyle(.secondary)
+                    Text(model.recordedAt).monospacedDigit()
+                }
+                Spacer()
+                TextField("HH:MM:SS", text: $model.seekTarget)
+                    .frame(width: 85).accessibilityLabel("Go to tape timecode")
+                    .disabled(!model.liveReady || model.busy || model.seeking)
+                if model.seeking {
+                    Button("Cancel") { model.liveCommand("cancel-seek") }
+                } else {
+                    Button("Go to timecode") { model.seek() }
+                        .disabled(!model.liveReady || model.busy || model.targetSeconds == nil)
+                        .help("Position the tape near the specified hour, minute and second.")
+                }
+            }
             HStack(spacing: 6) {
                 Group {
                     Button { model.liveCommand("navigate-back") } label: { Label("Rewind", systemImage: "backward.fill") }.help("Rewind (← or J)")
@@ -614,7 +668,7 @@ struct CaptureView: View {
                     Button { model.liveCommand("pause") } label: { Label("Pause", systemImage: "pause.fill") }.help("Pause (K)")
                     Button { model.liveCommand("stop") } label: { Label("Stop tape", systemImage: "stop.fill") }.help("Stop tape")
                     Button { model.liveCommand("navigate-forward") } label: { Label("Forward", systemImage: "forward.fill") }.help("Forward (→ or L)")
-                }.disabled(!model.liveReady || model.recording)
+                }.disabled(!model.liveReady || model.recording || model.seeking)
                 Spacer()
                 Button { model.muted.toggle() } label: {
                     Label(model.muted ? "Unmute" : "Mute", systemImage: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
@@ -684,7 +738,7 @@ struct CaptureView: View {
             } else {
                 Button { model.start() } label: {
                     Label("Start Capture", systemImage: "record.circle").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent).disabled(model.busy || (model.previewing && !model.liveReady)).help("Start capture (R)")
+                }.buttonStyle(.borderedProminent).disabled(model.busy || model.seeking || (model.previewing && !model.liveReady)).help("Start capture (R)")
             }
             HStack(alignment: .top) {
                 if model.busy && !model.recording { ProgressView().controlSize(.small) }

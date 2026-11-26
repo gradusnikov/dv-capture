@@ -1,6 +1,6 @@
 # DV Capture
 
-A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9.5**.
+A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9.6**.
 
 DV Capture remembers the destination folder, filename prefix, duration, MOV quality, tape control and end-of-footage settings, preview mute and volume, and whether Capture details is expanded. Each macOS account has its own settings.
 
@@ -48,6 +48,8 @@ To install for all local accounts, copy the built app to `/Applications` with ad
 5. Show in Finder reveals the editor-ready result. The original DV and any corrected DV copy are in the same folder.
 
 With the capture window active, use Left Arrow or J for reverse, Right Arrow or L for forward, K to pause, and Space or the Pause key to toggle playback. R starts capture. After editing File name or Duration, press Return or Esc, or click the video preview, to keep the edit and return to shortcuts.
+
+During preview, **Tape timecode** shows hours, minutes, seconds and frames. **Recorded** shows the original camera clock when available. Enter a target as HH:MM:SS and choose **Go to timecode** for approximate positioning in VTR mode. Use **Cancel** to stop a seek.
 
 Capture also works without preview. During playback, Rewind and Forward request reverse or forward picture search. Press Play to resume normal playback. For full-speed tape winding, press Stop first. Search pictures depend on the deck’s FireWire output. Transport controls are disabled while recording. Pausing tape playback silences the audio monitor until playback resumes. Preview volume/mute never affect recorded audio. Live monitoring plays the first stereo pair; captures and full MOV exports preserve all recognized audio tracks.
 

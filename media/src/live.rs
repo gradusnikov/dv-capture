@@ -196,6 +196,12 @@ pub fn run(engine_path: &Path) -> Result<()> {
                 let mut state = paused.lock().unwrap();
                 *state = line.ends_with("on");
                 emit(json!({"event":"monitor_pause","paused":*state}));
+            } else if let Some(fields) = line.strip_prefix("Tape metadata: ") {
+                if let Some((tc, date)) = fields.split_once('|') {
+                    emit(json!({"event":"metadata","timecode":tc,"recorded":date}));
+                }
+            } else if let Some(result) = line.strip_prefix("Seek result: ") {
+                emit(json!({"event":"seek_result","result":result}));
             } else if let Some(token) = line.strip_prefix("DV end detected ") {
                 emit(json!({"event":"tape_end","token":token}));
             } else {
@@ -283,6 +289,22 @@ pub fn run(engine_path: &Path) -> Result<()> {
                     }
                     emit(json!({"event":"recording","path":path}));
                 }
+                Some("seek") => {
+                    if let Some(seconds) = cmd["seconds"]
+                        .as_str()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .filter(|s| *s < 86400)
+                    {
+                        if rec.lock().unwrap().is_none() {
+                            writeln!(control, "seek {seconds}")?;
+                        } else {
+                            emit(json!({"event":"seek_result","result":"failed"}));
+                        }
+                    } else {
+                        emit(json!({"event":"seek_result","result":"failed"}));
+                    }
+                }
+                Some("cancel-seek") => writeln!(control, "cancel-seek")?,
                 Some("save") => {
                     finish(&rec)?;
                     writeln!(control, "unwatch-end")?;

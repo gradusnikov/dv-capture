@@ -29,6 +29,7 @@
 #include <string>
 #include <ctime>
 #include <mutex>
+#include <thread>
 #include <sys/select.h>
 
 #include "dvmeta.h"
@@ -58,6 +59,7 @@ static const UInt8 kTapeWindRewind  = 0x65;  // WIND  opcode 0xC4, rewind toward
 // Global stop signalling (set from a Unix signal handler and from callbacks
 // running on the AVCVideoServices real-time thread).
 // ---------------------------------------------------------------------------
+static std::atomic<bool> gCancelSeek{false};
 static std::atomic<bool> gStopRequested{false};   // Ctrl-C / SIGTERM
 static std::atomic<bool> gNoData{false};           // no isoch data for a while (end of tape?)
 static std::atomic<bool> gDeviceGone{false};       // device unplugged / suspended
@@ -160,9 +162,11 @@ static void Info(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
+    flockfile(stderr);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fputc('\n', stderr);
+    funlockfile(stderr);
 }
 
 // StringLogger sink for the AVCVideoServices framework. Only shown with -v.
@@ -240,8 +244,8 @@ static IOReturn DvFrameProc(DVFrameReceiveMessage msg, DVReceiveFrame *pFrame, v
             st->dropped.fetch_add(1);
 
         tapecap::TapeMeta m;
-        if (tapecap::DvParseFrame(pFrame->pFrameData, pFrame->frameLen, &m))
-            st->recordMeta(m);
+        tapecap::DvParseFrame(pFrame->pFrameData, pFrame->frameLen, &m);
+        st->recordMeta(m);
         {
             std::lock_guard<std::mutex> lock(st->endMutex);
             if (st->watchingEnd)
@@ -543,7 +547,7 @@ static bool FineSeekToTimecode(AVCDevice *dev, long goal, long cur)
     if (timeout < 10.0) timeout = 10.0;
 
     bool reached = false;
-    while (!gStopRequested.load())
+    while (!gStopRequested.load() && !gCancelSeek.load())
     {
         usleep(200 * 1000);
         double now = NowMono();
@@ -650,7 +654,7 @@ static bool SeekToTimecode(AVCDevice *dev, long targetSec, long overlapSec)
                              forward ? "FAST FORWARD" : "REWIND"))
         return false;
 
-    while (!gStopRequested.load())
+    while (!gStopRequested.load() && !gCancelSeek.load())
     {
         usleep(250 * 1000);
         double now = NowMono();
@@ -1457,6 +1461,11 @@ static int CmdCapture(const CaptureOptions &opt)
     std::string endToken;
     bool transportUsed = false;
     bool monitorPaused = false;
+    std::thread seekWorker;
+    std::atomic<bool> seeking{false};
+    unsigned long long metadataFrame = 0;
+    double lastMetadataAt = 0;
+    std::string previousMetadata;
     double nextPauseInquiry = 0;
     auto reportPause = [&](bool paused) {
         if (paused != monitorPaused) {
@@ -1486,6 +1495,31 @@ static int CmdCapture(const CaptureOptions &opt)
                     if (cmd == "unwatch-end") {
                         st.watchEnd(false);
                         endToken.clear();
+                        continue;
+                    }
+                    if (cmd == "cancel-seek") { gCancelSeek.store(true); continue; }
+                    if (seeking.load()) continue;
+                    if (cmd.compare(0, 5, "seek ") == 0) {
+                        long target = 0;
+                        if (!ParseTimecodeArg(cmd.c_str() + 5, &target) || target < 0 || target >= 86400) {
+                            Info("Seek result: failed");
+                            continue;
+                        }
+                        if (seekWorker.joinable()) seekWorker.join();
+                        seeking.store(true);
+                        gCancelSeek.store(false);
+                        transportUsed = true;
+                        seekWorker = std::thread([&, target] {
+                            bool ok = SeekToTimecode(dev, target, 0);
+                            bool stopped = SendTransportOrWarn(dev, kAVCTapeWindOpcode, kTapeWindStop, "STOP");
+                            long actual;
+                            const char *result = "failed";
+                            if (gCancelSeek.load()) result = "cancelled";
+                            else if (ok && stopped) result = ReadTapeTcSeconds(dev, &actual) &&
+                                labs(actual - target) <= 2 ? "reached" : "approximate";
+                            seeking.store(false);
+                            Info("Seek result: %s", result);
+                        });
                         continue;
                     }
                     UInt8 opcode = kAVCTapeWindOpcode, operand = kTapeWindStop;
@@ -1528,7 +1562,27 @@ static int CmdCapture(const CaptureOptions &opt)
                 if (pendingCommands.size() > 1024) pendingCommands.clear();
             }
             // Also follow the deck buttons, including a deck already paused on connection.
-            if (NowMono() >= nextPauseInquiry) {
+            const auto frame = st.framesOrPackets.load();
+            const double now = NowMono();
+            tapecap::TapeMeta meta;
+            if (frame != metadataFrame) {
+                metadataFrame = frame;
+                lastMetadataAt = now;
+            }
+            if (frame && now - lastMetadataAt < 1.5) {
+                std::lock_guard<std::mutex> lock(st.metaMutex);
+                meta = st.latestMeta;
+            }
+            char tc[20] = "-", date[32] = "-";
+            if (meta.haveTc) snprintf(tc, sizeof tc, "%02d:%02d:%02d:%02d", meta.tcH, meta.tcM, meta.tcS, meta.tcF);
+            if (meta.haveDate) snprintf(date, sizeof date, "%04d-%02d-%02d %02d:%02d:%02d",
+                meta.year, meta.month, meta.day, meta.hour, meta.minute, meta.second);
+            std::string metadata = std::string(tc) + "|" + date;
+            if (metadata != previousMetadata) {
+                Info("Tape metadata: %s", metadata.c_str());
+                previousMetadata = metadata;
+            }
+            if (!seeking.load() && now >= nextPauseInquiry) {
                 UInt8 mode = 0, state = 0;
                 bool stable = false;
                 if (ReadTransportState(dev, &mode, &state, &stable) && stable)
@@ -1579,7 +1633,9 @@ static int CmdCapture(const CaptureOptions &opt)
     }
     if (showProgress) fputc('\n', stderr);
 
-    // Teardown
+    // Finish outstanding transport work before closing the device.
+    gCancelSeek.store(true);
+    if (seekWorker.joinable()) seekWorker.join();
     dev->StopAVCDeviceStream(stream);
     if (opt.control || transportUsed)
         SendTransportOrWarn(dev, kAVCTapeWindOpcode, kTapeWindStop, "STOP");
