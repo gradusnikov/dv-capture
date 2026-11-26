@@ -1,6 +1,6 @@
 # DV Capture
 
-A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9.4**.
+A small native macOS app for capturing DV camcorders over FireWire, with live video/audio preview and tape transport controls. Current app version: **1.9.5**.
 
 DV Capture remembers the destination folder, filename prefix, duration, MOV quality, tape control and end-of-footage settings, preview mute and volume, and whether Capture details is expanded. Each macOS account has its own settings.
 
@@ -9,7 +9,7 @@ DV Capture remembers the destination folder, filename prefix, duration, MOV qual
 ## Features
 
 - Side-by-side camera preview and capture controls.
-- Low-latency, deinterlaced preview at the source frame rate (tested at 25 fps PAL).
+- Native VideoToolbox decoding and deinterlaced AVFoundation preview at the source frame rate (tested at 25 fps PAL).
 - Live stereo audio monitoring, mute, and volume controls.
 - Play, pause, stop, rewind, and fast-forward in VTR mode.
 - Raw DV capture with optional duration limit and automatic tape playback.
@@ -72,7 +72,7 @@ This is a compatibility workaround, not a claim to fix every damaged DV recordin
 ## Source layout and validation
 
 - `DVCapture.swift`: SwiftUI window, capture lifecycle, native video rendering, and audio monitoring.
-- `media/src/live.rs`: shared camera session, independent raw recording, video/audio preview decoders.
+- `media/src/live.rs`: shared camera session, independent raw recording, DV frame delivery and audio monitoring.
 - `media/src/export.rs`: metadata recovery and non-destructive DV/MOV export.
 - `tapecap/`: vendored capture backend and its upstream documentation/licenses.
 

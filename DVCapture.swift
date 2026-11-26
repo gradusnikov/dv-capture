@@ -2,25 +2,6 @@ import SwiftUI
 import AppKit
 import AVFoundation
 import Darwin
-import ImageIO
-
-final class PreviewSurface {
-    weak var view: NSImageView?
-    var image: NSImage? { didSet { view?.image = image } }
-}
-struct NativePreview: NSViewRepresentable {
-    let surface: PreviewSurface
-    func makeNSView(context: Context) -> NSImageView {
-        let view = NSImageView()
-        view.imageScaling = .scaleProportionallyUpOrDown
-        view.image = surface.image; surface.view = view
-        return view
-    }
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSImageView, context: Context) -> CGSize? {
-        proposal.replacingUnspecifiedDimensions(by: .zero)
-    }
-    func updateNSView(_ view: NSImageView, context: Context) {}
-}
 
 // All engine and player operations are serialized off the UI thread.
 final class LiveAudioMonitor {
@@ -142,7 +123,8 @@ final class CaptureModel: ObservableObject {
 
     @Published var previewing = false
     @Published var liveReady = false
-    let previewSurface = PreviewSurface()
+    let pixelDisplay = AVSampleBufferDisplayLayer()
+    private var pendingSample: CMSampleBuffer?
     @Published var liveMessage = "Preview is off"
     private var liveProcess: Process?
     private var liveInput: FileHandle?
@@ -150,7 +132,6 @@ final class CaptureModel: ObservableObject {
     private var liveTimer: Timer?
     private var liveRecording = false
     private let previewLock = NSLock()
-    private var pendingPreview: NSImage?
     private var displayTimer: Timer?
     private var previewActivity: NSObjectProtocol?
     private var rateReports = 0
@@ -176,16 +157,16 @@ final class CaptureModel: ObservableObject {
 
     // The pipe reader replaces this one slot. Main-thread work cannot build a
     // backlog of old frames while a menu, sheet, or busy window blocks redraws.
-    private func queuePreview(_ data: Data) {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cg = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return }
-        let image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-        previewLock.lock(); pendingPreview = image; receivedFrames += 1; previewLock.unlock()
-    }
     private func displayLatestPreview() {
-        previewLock.lock(); let data = pendingPreview; pendingPreview = nil; previewLock.unlock()
-        guard let image = data else { return }
-        previewSurface.image = image; lastFrame = Date(); displayedFrames += 1
+        previewLock.lock()
+        let sample = pendingSample
+        pendingSample = nil
+        previewLock.unlock()
+        guard let sample else { return }
+        if pixelDisplay.status == .failed { pixelDisplay.flush() }
+        guard pixelDisplay.isReadyForMoreMediaData else { return }
+        pixelDisplay.enqueue(sample)
+        lastFrame = Date(); displayedFrames += 1
         if liveMessage != "Live preview" { liveMessage = "Live preview" }
         let interval = Date().timeIntervalSince(rateStarted)
         if interval >= 1 {
@@ -210,9 +191,10 @@ final class CaptureModel: ObservableObject {
         let p = Process(), input = Pipe(), output = Pipe()
         p.executableURL = mediaHelper
         p.arguments = ["live", executable.path]
+        pixelDisplay.flushAndRemoveImage()
         p.standardInput = input; p.standardOutput = output; p.standardError = FileHandle.nullDevice
         liveProcess = p; liveInput = input.fileHandleForWriting
-        previewing = true; liveReady = false; previewSurface.image = nil
+        previewing = true; liveReady = false
         liveMessage = "Connecting…"; log = ""
         do { try p.run() } catch {
             previewing = false; liveProcess = nil; liveInput = nil
@@ -225,7 +207,7 @@ final class CaptureModel: ObservableObject {
         }
         audioMonitor.start(volume: muted ? 0 : Float(monitorVolume))
         lastFrame = .distantPast
-        previewLock.lock(); pendingPreview = nil; previewLock.unlock()
+        previewLock.lock(); pendingSample = nil; previewLock.unlock()
         displayedFrames = 0; previewRate = 0; rateStarted = Date()
         let display = Timer(timeInterval: 1.0 / 60.0, repeats: true) { _ in self.displayLatestPreview() }
         displayTimer = display
@@ -237,6 +219,9 @@ final class CaptureModel: ObservableObject {
         }
         DispatchQueue.global(qos: .userInitiated).async {
             var buffer = Data()
+            let decoder = DVPreviewDecoder()
+            var frameLength = 0
+            var decodeErrorReported = false
             var announcedAudio = false
             // The reader lives for the whole tape. Release temporary decoded images
             // and Foundation objects after each pipe read, including partial lines.
@@ -246,12 +231,33 @@ final class CaptureModel: ObservableObject {
                     let data = output.fileHandleForReading.availableData
                     if data.isEmpty { return false }
                     buffer.append(data)
-                    while let end = buffer.firstIndex(of: 10) {
+                    while true {
+                        if frameLength > 0 {
+                            guard buffer.count >= frameLength else { break }
+                            let frame = Data(buffer.prefix(frameLength))
+                            buffer.removeFirst(frameLength); frameLength = 0
+                            do {
+                                try decoder.decode(frame) { sample in
+                                    self.previewLock.lock(); self.pendingSample = sample
+                                    self.receivedFrames += 1; self.previewLock.unlock()
+                                }
+                            } catch {
+                                if !decodeErrorReported {
+                                    decodeErrorReported = true
+                                    DispatchQueue.main.async {
+                                        self.status = "Video preview decoding failed. See Capture details."
+                                        self.append("Native DV decoder: " + error.localizedDescription + "\n")
+                                    }
+                                }
+                            }
+                            continue
+                        }
+                        guard let end = buffer.firstIndex(of: 10) else { break }
                         let line = buffer[..<end]; buffer.removeSubrange(...end)
                         if let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] {
-                            if obj["event"] as? String == "frame", let encoded = obj["data"] as? String,
-                               let data = Data(base64Encoded: encoded) {
-                                self.queuePreview(data)
+                            if obj["event"] as? String == "dv", let length = obj["bytes"] as? Int,
+                               length == 144000 || length == 120000 {
+                                frameLength = length
                             } else if obj["event"] as? String == "monitor_pause", let paused = obj["paused"] as? Bool {
                                 announcedAudio = false
                                 if paused { self.audioMonitor.discardBufferedAudio() }
@@ -277,7 +283,8 @@ final class CaptureModel: ObservableObject {
                 if let activity = self.previewActivity { ProcessInfo.processInfo.endActivity(activity) }
                 self.previewActivity = nil
                 self.displayTimer?.invalidate(); self.displayTimer = nil
-                self.previewLock.lock(); self.pendingPreview = nil; self.previewLock.unlock()
+                self.pixelDisplay.flushAndRemoveImage()
+                self.previewLock.lock(); self.pendingSample = nil; self.previewLock.unlock()
                 self.liveTimer?.invalidate(); self.liveTimer = nil
                 self.liveProcess = nil; self.liveInput = nil
                 self.previewing = false; self.liveReady = false
@@ -446,7 +453,7 @@ final class CaptureModel: ObservableObject {
         }
     }
     func refreshSize() {
-        if let file = lastFile, let attrs = try? FileManager.default.attributesOfItem(atPath: file.path) {
+        if let file = lastFile, let attrs = try? Foundation.FileManager.default.attributesOfItem(atPath: file.path) {
             bytes = (attrs[.size] as? NSNumber)?.int64Value ?? 0
         }
     }
@@ -480,14 +487,14 @@ final class CaptureModel: ObservableObject {
         let kind = preview ? "preview" : "audio"
         var output = automatic ? file.deletingPathExtension().appendingPathExtension("mov")
             : file.deletingPathExtension().appendingPathExtension("\(kind)-\(UUID().uuidString.prefix(6)).mov")
-        if FileManager.default.fileExists(atPath: output.path) {
+        if Foundation.FileManager.default.fileExists(atPath: output.path) {
             output = file.deletingPathExtension().appendingPathExtension("audio-\(UUID().uuidString.prefix(6)).mov")
         }
         let destination = output
         let args = ["export", file.path, output.path, preview ? "preview" : movQuality.rawValue]
         launch(mediaHelper, args) { code, report in
             self.busy = false
-            if code == 0, FileManager.default.fileExists(atPath: output.path) {
+            if code == 0, Foundation.FileManager.default.fileExists(atPath: output.path) {
                 if !preview { self.lastMOV = destination }
                 self.status = self.captureHadWarnings ? "MOV saved · capture warnings in details" :
                     (report.contains("Saved corrected DV:") ? "MOV + corrected DV saved" : (report.contains("Recovered") ? "MOV saved · audio corrected" : "MOV saved with audio"))
@@ -589,7 +596,9 @@ struct CaptureView: View {
     private var previewPanel: some View {
         VStack(spacing: 10) {
             ZStack {
-                Color.black.overlay { NativePreview(surface: model.previewSurface) }
+                Color.black.overlay {
+                    PixelPreview(display: model.pixelDisplay).aspectRatio(4.0/3.0, contentMode: .fit)
+                }
                 if !model.previewing {
                     Button("Start Live Preview") { model.startLive() }
                         .disabled(model.busy)

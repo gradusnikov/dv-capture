@@ -79,34 +79,6 @@ fn decoder(args: &[&str]) -> Result<Process> {
     ))
 }
 
-fn video_output(mut source: impl Read) -> io::Result<()> {
-    let mut chunk = [0; 65536];
-    let mut jpeg = Vec::new();
-    let mut prev = 0;
-    loop {
-        let n = source.read(&mut chunk)?;
-        if n == 0 {
-            return Ok(());
-        }
-        for &byte in &chunk[..n] {
-            if jpeg.is_empty() {
-                if prev == 0xff && byte == 0xd8 {
-                    jpeg.extend([prev, byte]);
-                }
-            } else {
-                jpeg.push(byte);
-                if prev == 0xff && byte == 0xd9 {
-                    emit(json!({"event":"frame","data":STANDARD.encode(&jpeg)}));
-                    jpeg.clear();
-                } else if jpeg.len() > 4_000_000 {
-                    jpeg.clear();
-                }
-            }
-            prev = byte;
-        }
-    }
-}
-
 fn audio_output(mut source: impl Read, paused: Arc<Mutex<bool>>) {
     let mut pcm = [0; 7680];
     while source.read_exact(&mut pcm).is_ok() {
@@ -169,36 +141,6 @@ enum Event {
     Ended,
 }
 pub fn run(engine_path: &Path) -> Result<()> {
-    let mut video = decoder(&[
-        "-probesize",
-        "32",
-        "-analyzeduration",
-        "0",
-        "-threads",
-        "1",
-        "-flags",
-        "low_delay",
-        "-f",
-        "dv",
-        "-i",
-        "pipe:0",
-        "-an",
-        "-fps_mode",
-        "passthrough",
-        "-vf",
-        "bwdif=mode=send_frame:parity=auto:deint=all,scale=640:480",
-        "-c:v",
-        "mjpeg",
-        "-q:v",
-        "5",
-        "-threads",
-        "1",
-        "-f",
-        "image2pipe",
-        "-flush_packets",
-        "1",
-        "pipe:1",
-    ])?;
     let mut audio = decoder(&[
         "-probesize",
         "144000",
@@ -266,16 +208,20 @@ pub fn run(engine_path: &Path) -> Result<()> {
     });
     let pictures = Frames::new(1);
     let sound = Frames::new(4);
-    let source_video = video.0.stdout.take().unwrap();
+
     let source_audio = audio.0.stdout.take().unwrap();
-    let mut video_in = video.0.stdin.take().unwrap();
+
     let mut audio_in = audio.0.stdin.take().unwrap();
-    let video_reader = thread::spawn(move || video_output(source_video));
+
     let audio_reader = thread::spawn(move || audio_output(source_audio, audio_state));
     let q = pictures.clone();
     let video_writer = thread::spawn(move || {
-        while let Some(f) = q.next() {
-            if video_in.write_all(&f).is_err() {
+        while let Some(frame) = q.next() {
+            // Keep the header and its binary payload atomic relative to JSON events.
+            let mut out = io::stdout().lock();
+            if writeln!(out, "{{\"event\":\"dv\",\"bytes\":{}}}", frame.len()).is_err()
+                || out.write_all(&frame).and_then(|_| out.flush()).is_err()
+            {
                 break;
             }
         }
@@ -373,11 +319,9 @@ pub fn run(engine_path: &Path) -> Result<()> {
     emit(json!({"event":"ended"}));
     let _ = log_reader.join();
     // Termination releases blocked decoder pipe writes even for a damaged stream.
-    drop(video);
     drop(audio);
     let _ = video_writer.join();
     let _ = audio_writer.join();
-    let _ = video_reader.join();
     let _ = audio_reader.join();
     received?;
     commands
